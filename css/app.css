@@ -64,3 +64,82 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--brand-so
 .badge{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:6px;background:var(--surface-2);color:var(--ink-faint);}
 .empty{text-align:center;color:var(--ink-faint);font-size:13px;padding:30px;}
 .soon{display:inline-block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);padding:2px 7px;border-radius:6px;margin-left:6px;}
+
+/* ===== Finanzen-Modul ===== */
+.fin-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:16px;}
+.fin-pickers{display:flex;gap:12px;flex-wrap:wrap;}
+label.inline{display:inline-flex;flex-direction:column;gap:4px;font-size:11px;font-weight:600;color:var(--ink-faint);margin:0;}
+label.inline select{min-width:150px;}
+.subnav{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:18px;}
+.subnav button{appearance:none;border:none;background:transparent;color:var(--ink-soft);font:600 13px var(--sans);padding:9px 13px;border-radius:8px 8px 0 0;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}
+.subnav button:hover:not(.active){background:var(--surface-2);color:var(--ink);}
+.subnav button.active{color:var(--brand);border-bottom-color:var(--co-accent,var(--brand));}
+.row-between{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.card-title{font-family:var(--serif);font-size:16px;font-weight:600;margin:0;}
+.muted{color:var(--ink-faint);font-size:12px;}
+
+/* Statistik-Kacheln */
+.stat-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:14px 16px;border-left:3px solid var(--line-strong);}
+.stat.good{border-left-color:var(--good);}.stat.crit{border-left-color:var(--crit);}.stat.plain{border-left-color:var(--accent);}
+.stat-l{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--ink-faint);font-weight:600;}
+.stat-v{font-family:var(--serif);font-size:22px;font-weight:600;margin-top:3px;}
+.stat.good .stat-v{color:var(--good);}.stat.crit .stat-v{color:var(--crit);}
+
+/* Tabellen */
+.tbl{width:100%;border-collapse:collapse;font-size:13.5px;}
+.tbl th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-faint);font-weight:600;padding:7px 10px;border-bottom:1px solid var(--line);}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle;}
+.tbl tbody tr:hover{background:var(--surface-2);}
+.tbl tfoot td{border-top:2px solid var(--line-strong);border-bottom:none;font-weight:700;}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.tbl .pos{color:var(--good);}.tbl .neg{color:var(--crit);}
+.tbl-scroll{overflow-x:auto;}
+.pill{font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;}
+.pill.einnahme{background:var(--good-bg);color:var(--good);}
+.pill.ausgabe{background:var(--crit-bg);color:var(--crit);}
+.tag{font-size:9px;font-weight:700;letter-spacing:.04em;color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent);padding:1px 5px;border-radius:5px;vertical-align:middle;}
+.act{white-space:nowrap;text-align:right;}
+.lnk{appearance:none;border:none;background:none;color:var(--brand-soft);font:600 12.5px var(--sans);cursor:pointer;padding:2px 6px;border-radius:6px;}
+.lnk:hover{background:var(--surface-2);}
+.lnk.del{color:var(--crit);}
+.filters{display:flex;gap:10px;flex-wrap:wrap;}
+.filters select,.filters input{width:auto;}
+
+/* Balken (Umsatzziel / Soll-Ist) */
+.bar{height:8px;border-radius:999px;background:var(--surface-2);overflow:hidden;min-width:80px;}
+.bar span{display:block;height:100%;border-radius:999px;transition:width .3s;}
+.barcol{width:180px;}
+.pctlbl{font-size:11px;color:var(--ink-faint);margin-left:6px;}
+.sollist input.soll-inp{width:120px;text-align:right;padding:6px 9px;}
+.soll-inp.saved{border-color:var(--good);box-shadow:0 0 0 3px var(--good-bg);}
+.soll-inp.saveerr{border-color:var(--crit);}
+.tbl.sollist td{vertical-align:middle;}
+.tbl tfoot tr.foot td{border-top:2px solid var(--line-strong);}
+
+/* PDF-Dropzone */
+.dropzone{border:2px dashed var(--line-strong);background:var(--surface-2);text-align:center;transition:.15s;}
+.dropzone.over{border-color:var(--brand-soft);background:color-mix(in srgb,var(--brand) 8%,var(--surface));}
+.dz-inner{padding:26px 16px;}
+.dz-ic{font-size:26px;color:var(--accent);margin-bottom:6px;}
+.tbl.import input,.tbl.import select{padding:6px 8px;font-size:12.5px;}
+.tbl.import input[type=date]{width:130px;}.tbl.import .num{width:100px;}
+.tbl.import tr.off{opacity:.42;}
+
+/* Kostenstellen */
+.ks-add{display:flex;gap:8px;margin-bottom:12px;}
+.ks-list{display:flex;flex-direction:column;gap:6px;}
+.ks-row{display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--surface-2);font-size:13.5px;}
+
+/* Modal */
+.modal-back{position:fixed;inset:0;background:rgba(16,20,15,.45);backdrop-filter:blur(2px);display:grid;place-items:center;z-index:100;padding:20px;}
+.modal{background:var(--surface);border:1px solid var(--line);border-radius:15px;box-shadow:var(--shadow);width:560px;max-width:100%;max-height:90vh;overflow:auto;}
+.modal-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line);}
+.modal-head h3{margin:0;font-family:var(--serif);font-size:17px;}
+.modal-x{appearance:none;border:none;background:none;font-size:16px;color:var(--ink-faint);cursor:pointer;padding:4px 8px;border-radius:7px;}
+.modal-x:hover{background:var(--surface-2);color:var(--ink);}
+.modal-body{padding:18px;}
+.modal-foot{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px;border-top:1px solid var(--line);}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
+.form-grid .col2{grid-column:1 / -1;}
+@media(max-width:560px){.form-grid{grid-template-columns:1fr;}.barcol{width:120px;}}

@@ -21,8 +21,9 @@ Im Projekt: **Project Settings → API**. Kopiere:
 Diese beiden Werte in `js/config.js` eintragen (oder Claude geben, er trägt sie ein).
 
 ### 3. Datenbank aufsetzen
-Im Projekt: **SQL Editor → New query** → den Inhalt von [`supabase/schema.sql`](supabase/schema.sql) einfügen → **Run**.
-(Erstellt Tabellen, Zugriffsregeln und die 4 Unternehmen.)
+Im Projekt: **SQL Editor → New query** → nacheinander ausführen:
+1. [`supabase/schema.sql`](supabase/schema.sql) — Tabellen, Zugriffsregeln, die 4 Unternehmen.
+2. [`supabase/schema_finanzen.sql`](supabase/schema_finanzen.sql) — Finanzen-Modul: Buchungen, Kostenstellen, Budgets (Einnahmen-Ausgaben-Rechnung, Soll-Ist, PDF-Import).
 
 ### 4. Admin-Zugang anlegen
 1. **Authentication → Users → Add user** → deine E-Mail + Passwort (E-Mail bestätigt setzen).
