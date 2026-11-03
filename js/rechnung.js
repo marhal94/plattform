@@ -1,7 +1,7 @@
 // Rechnungsmodul: Ausgangsrechnungen erstellen, speichern, drucken (PDF),
 // mit Unternehmens-Design, Positionen/Rabatten, Nummernkreis, SEPA-QR.
 // Bezahlte Rechnungen werden als Einnahme in die EAR gebucht.
-import { sb, esc, fmtEUR, fmtDate, todayISO, uuid } from "./db.js";
+import { sb, esc, fmtEUR, fmtDate, todayISO, uuid, fyStartMonth, fyRange, fyLabel } from "./db.js";
 import { modal, showErr } from "./ui.js";
 import { loadKatalog, customers, products, upsertCustomerFromInvoice, upsertProductsFromPositions } from "./katalog.js";
 
@@ -57,7 +57,7 @@ export async function renderRechnungen(body, company, year, refresh) {
 }
 async function loadInvoices() {
   const { data, error } = await sb.from("invoices").select("*").eq("company_id", R.company.id).eq("typ", "ausgang")
-    .gte("datum", R.year + "-01-01").lte("datum", R.year + "-12-31").order("datum", { ascending: false });
+    .gte("datum", fyRange(R.year, fyStartMonth(R.company))[0]).lte("datum", fyRange(R.year, fyStartMonth(R.company))[1]).order("datum", { ascending: false });
   R.err = error ? error.message : null;
   R.invoices = data || [];
 }
@@ -84,7 +84,7 @@ function renderList() {
     if (q) rows = rows.filter((i) => ((i.nummer || "") + " " + (i.kunde || "") + " " + (i.betreff || "")).toLowerCase().includes(q));
     const sumOffen = R.invoices.filter((i) => i.status === "offen").reduce((s, i) => s + (+i.brutto || 0), 0);
     const sumBez = R.invoices.filter((i) => i.status === "bezahlt").reduce((s, i) => s + (+i.brutto || 0), 0);
-    body.querySelector("#invSum").innerHTML = `${R.invoices.length} Rechnung(en) ${R.year} · offen <b class="neg">${fmtEUR(sumOffen)}</b> · bezahlt <b class="pos">${fmtEUR(sumBez)}</b>`;
+    body.querySelector("#invSum").innerHTML = `${R.invoices.length} Rechnung(en) ${fyLabel(R.year, fyStartMonth(R.company))} · offen <b class="neg">${fmtEUR(sumOffen)}</b> · bezahlt <b class="pos">${fmtEUR(sumBez)}</b>`;
     body.querySelector("#invWrap").innerHTML = rows.length ? `
       <table class="tbl">
         <thead><tr><th>Nr.</th><th>Datum</th><th>Kunde</th><th>Betreff</th><th class="num">Brutto</th><th>Status</th><th></th></tr></thead>
@@ -98,7 +98,7 @@ function renderList() {
             ${i.status === "offen" ? `<button class="lnk" data-paid="${i.id}">bezahlt</button>` : ""}
             <button class="lnk del" data-del="${i.id}">Löschen</button>
           </td></tr>`).join("")}</tbody>
-      </table>` : `<div class="empty">${R.invoices.length ? "Keine Treffer für diesen Filter." : `Noch keine Rechnungen in ${R.year}. Lege die erste mit „+ Neue Rechnung" an.`}</div>`;
+      </table>` : `<div class="empty">${R.invoices.length ? "Keine Treffer für diesen Filter." : `Noch keine Rechnungen in ${fyLabel(R.year, fyStartMonth(R.company))}. Lege die erste mit „+ Neue Rechnung" an.`}</div>`;
     body.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => startEditor(R.invoices.find((x) => x.id === el.dataset.open))));
     body.querySelectorAll("[data-print]").forEach((el) => el.addEventListener("click", () => printInvoice(R.invoices.find((x) => x.id === el.dataset.print))));
     body.querySelectorAll("[data-paid]").forEach((el) => el.addEventListener("click", () => markPaid(R.invoices.find((x) => x.id === el.dataset.paid))));

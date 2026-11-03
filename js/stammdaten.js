@@ -43,12 +43,14 @@ export function renderStammdaten(body, c, onSaved) {
         <label class="col2"><input type="checkbox" data-n="useYear" ${nb.useYear !== false ? "checked" : ""} style="width:auto;margin-right:6px">Jahr in der Nummer verwenden</label>
       </div>
 
-      <h4 class="sec">Design & Hinweis</h4>
+      <h4 class="sec">Wirtschaftsjahr & Design</h4>
       <div class="form-grid">
+        <label>Wirtschaftsjahr beginnt im<select data-d="fyStart">${["Jänner (= Kalenderjahr)", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"].map((n, i) => `<option value="${i + 1}" ${(+dz.fyStart || 1) === i + 1 ? "selected" : ""}>${n}</option>`).join("")}</select></label>
         <label>Akzentfarbe<input data-d="accent" type="color" value="${esc(dz.accent || "#184437")}" style="height:40px;padding:3px"></label>
         <label>Logo${dz.logo ? ' <span class="tag">gesetzt</span>' : ""}<input id="logoFile" type="file" accept="image/*"></label>
         <label class="col2">Steuerlicher Standard-Hinweis<textarea data-d="steuer" rows="2" placeholder="z. B. Kleinunternehmerregelung …">${esc(dz.steuer || "")}</textarea></label>
       </div>
+      <p class="note">Bei z. B. Juli läuft das Wirtschaftsjahr 1.7.–30.6. und wird als „2026/2027" angezeigt.</p>
       ${dz.logo ? `<div style="margin-top:8px"><img src="${esc(dz.logo)}" style="max-height:54px;max-width:220px;border:1px solid var(--line);border-radius:8px;padding:4px;background:#fff"> <button class="lnk del" id="logoDel">Logo entfernen</button></div>` : ""}
 
       <div class="row-between" style="margin-top:18px">
@@ -77,6 +79,8 @@ export function renderStammdaten(body, c, onSaved) {
     const design = { ...newDesign, accent: g("data-d", "accent").value, steuer: g("data-d", "steuer").value.trim() || undefined };
     if (!design.steuer) delete design.steuer;
     if (!design.logo) delete design.logo;
+    const fy = parseInt(g("data-d", "fyStart").value, 10) || 1;
+    if (fy === 1) delete design.fyStart; else design.fyStart = fy;
     const numbering = {
       prefix: g("data-n", "prefix").value.trim() || "RE",
       next: Math.max(1, parseInt(g("data-n", "next").value, 10) || 1),

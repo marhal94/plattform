@@ -1,6 +1,6 @@
 // Finanzen-Modul: Einnahmen-Ausgaben-Rechnung (EAR), Buchungen,
 // Kontoauszug-PDF-Import, Soll-Ist-Vergleich, Kostenstellen.
-import { sb, esc, fmtEUR, fmtNum, fmtDate, todayISO, uuid } from "./db.js";
+import { sb, esc, fmtEUR, fmtNum, fmtDate, todayISO, uuid, fyStartMonth, fyLabel, fyRange, currentFYStartYear } from "./db.js";
 import { parseFile } from "./pdfimport.js";
 import { modal, closeModal, showErr } from "./ui.js";
 import { renderRechnungen } from "./rechnung.js";
@@ -43,7 +43,7 @@ async function loadCompanies() {
 }
 async function loadData() {
   F.err = null;
-  const from = `${F.year}-01-01`, to = `${F.year}-12-31`;
+  const [from, to] = fyRange(F.year, fyStartMonth(company()));
   const [bk, cc, bg, kn, usr] = await Promise.all([
     sb.from("bookings").select("*").eq("company_id", F.companyId).gte("datum", from).lte("datum", to).order("datum", { ascending: false }),
     sb.from("cost_centers").select("*").eq("company_id", F.companyId).order("name"),
@@ -61,6 +61,7 @@ async function loadData() {
 
 // ---------- Berechnungen ----------
 const company = () => F.companies.find((c) => c.id === F.companyId) || {};
+const fyl = () => fyLabel(F.year, fyStartMonth(company())); // Anzeige-Label des Wirtschaftsjahres
 const kontoName = (b) => (b.konto || "").trim() || DEFAULT_KONTO;
 // Buchungen gefiltert auf das aktuell gewählte Konto/die Kassa ("" = alle)
 const kb = () => (F.konto ? F.bookings.filter((b) => kontoName(b) === F.konto) : F.bookings);
@@ -124,6 +125,7 @@ export async function renderFinanzen(root) {
   }
   if (!F.companies.length) { root.querySelector(".empty").outerHTML = `<div class="empty">Noch keine Unternehmen freigeschaltet.</div>`; return; }
   if (!F.companyId || !F.companies.some((c) => c.id === F.companyId)) F.companyId = F.companies[0].id;
+  if (F._yearCompany !== F.companyId) { F.year = currentFYStartYear(fyStartMonth(company())); F._yearCompany = F.companyId; }
   await loadData();
   renderShell();
 }
@@ -145,7 +147,7 @@ function renderShell() {
         <label class="inline">Konto/Kassa
           <select id="finKonto"><option value="" ${F.konto === "" ? "selected" : ""}>Alle</option>${kontoOptions(F.konto)}</select>
         </label>
-        <label class="inline">Jahr
+        <label class="inline">Wirtschaftsjahr
           <select id="finYear">${yearOptions()}</select>
         </label>
       </div>
@@ -153,7 +155,7 @@ function renderShell() {
     <div class="subnav">${TABS.map((t) => `<button data-tab="${t.id}" class="${F.tab === t.id ? "active" : ""}">${t.label}</button>`).join("")}</div>
     <div id="finBody"></div>`;
   root.style.setProperty("--co-accent", accent);
-  root.querySelector("#finCo").addEventListener("change", async (e) => { F.companyId = e.target.value; F.konto = ""; await loadData(); renderShell(); });
+  root.querySelector("#finCo").addEventListener("change", async (e) => { F.companyId = e.target.value; F.konto = ""; F.year = currentFYStartYear(fyStartMonth(company())); F._yearCompany = F.companyId; await loadData(); renderShell(); });
   root.querySelector("#finKonto").addEventListener("change", (e) => { F.konto = e.target.value; renderShell(); });
   root.querySelector("#finYear").addEventListener("change", async (e) => { F.year = +e.target.value; await loadData(); renderShell(); });
   root.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { F.tab = b.dataset.tab; renderShell(); }));
@@ -161,11 +163,12 @@ function renderShell() {
 }
 
 function yearOptions() {
-  const now = new Date().getFullYear();
+  const start = fyStartMonth(company());
+  const cur = currentFYStartYear(start);
   const years = [];
-  for (let y = now + 1; y >= now - 5; y--) years.push(y);
+  for (let y = cur + 1; y >= cur - 4; y--) years.push(y);
   if (!years.includes(F.year)) years.push(F.year);
-  return years.sort((a, b) => b - a).map((y) => `<option value="${y}" ${y === F.year ? "selected" : ""}>${y}</option>`).join("");
+  return years.sort((a, b) => b - a).map((y) => `<option value="${y}" ${y === F.year ? "selected" : ""}>${fyLabel(y, start)}</option>`).join("");
 }
 
 function renderTab() {
@@ -208,23 +211,23 @@ function renderUebersicht(body) {
       ${stat("Buchungen", String(scope.length), "plain")}
     </div>
     <div class="card" style="margin-top:14px">
-      <div class="row-between" style="margin-bottom:10px"><h3 class="card-title">Kassenstände</h3><span class="muted">${F.year} · jede Kassa getrennt</span></div>
+      <div class="row-between" style="margin-bottom:10px"><h3 class="card-title">Kassenstände</h3><span class="muted">${fyl()} · jede Kassa getrennt</span></div>
       <table class="tbl"><thead><tr><th>Konto / Kassa</th><th class="num">Einnahmen</th><th class="num">Ausgaben</th><th class="num">Saldo</th></tr></thead>
         <tbody>${konten.map((k) => `<tr><td>${esc(k.k)}${F.konto === k.k ? ' <span class="tag">aktiv</span>' : ""}</td>
           <td class="num pos">${fmtEUR(k.ein)}</td><td class="num neg">${fmtEUR(k.aus)}</td><td class="num ${k.saldo >= 0 ? "pos" : "neg"}">${fmtEUR(k.saldo)}</td></tr>`).join("")}</tbody>
         <tfoot><tr><td>Gesamt</td><td class="num pos">${fmtEUR(totals(F.bookings).ein)}</td><td class="num neg">${fmtEUR(totals(F.bookings).aus)}</td><td class="num ${totals(F.bookings).saldo >= 0 ? "pos" : "neg"}">${fmtEUR(totals(F.bookings).saldo)}</td></tr></tfoot>
       </table>
     </div>
-    ${ziel ? `<div class="card" style="margin-top:14px"><div class="row-between"><label style="margin:0">Umsatzziel ${F.year}</label><span class="muted">${fmtEUR(t.ein)} / ${fmtEUR(ziel)} · ${zielPct}%</span></div>
+    ${ziel ? `<div class="card" style="margin-top:14px"><div class="row-between"><label style="margin:0">Umsatzziel ${fyl()}</label><span class="muted">${fmtEUR(t.ein)} / ${fmtEUR(ziel)} · ${zielPct}%</span></div>
       <div class="bar" style="margin-top:8px"><span style="width:${zielPct}%;background:var(--good)"></span></div></div>` : ""}
     <div class="card" style="margin-top:14px">
-      <div class="row-between" style="margin-bottom:10px"><h3 class="card-title">Nach Kostenstelle${F.konto ? " · " + esc(F.konto) : ""}</h3><span class="muted">${F.year}</span></div>
+      <div class="row-between" style="margin-bottom:10px"><h3 class="card-title">Nach Kostenstelle${F.konto ? " · " + esc(F.konto) : ""}</h3><span class="muted">${fyl()}</span></div>
       ${rows.length ? `<table class="tbl">
         <thead><tr><th>Kostenstelle</th><th class="num">Einnahmen</th><th class="num">Ausgaben</th><th class="num">Saldo</th></tr></thead>
         <tbody>${rows.map((r) => `<tr><td>${esc(r.k)}</td><td class="num pos">${fmtEUR(r.ein)}</td><td class="num neg">${fmtEUR(r.aus)}</td>
           <td class="num ${r.saldo >= 0 ? "pos" : "neg"}">${fmtEUR(r.saldo)}</td></tr>`).join("")}</tbody>
         <tfoot><tr><td>Summe</td><td class="num pos">${fmtEUR(t.ein)}</td><td class="num neg">${fmtEUR(t.aus)}</td><td class="num ${t.saldo >= 0 ? "pos" : "neg"}">${fmtEUR(t.saldo)}</td></tr></tfoot>
-      </table>` : `<div class="empty">Noch keine Buchungen in ${F.year}. Lege welche unter „Buchungen" an oder lies einen Kontoauszug ein.</div>`}
+      </table>` : `<div class="empty">Noch keine Buchungen in ${fyl()}. Lege welche unter „Buchungen" an oder lies einen Kontoauszug ein.</div>`}
     </div>
     <div class="card" style="margin-top:14px">
       <div class="row-between">
@@ -275,7 +278,7 @@ function renderBuchungen(body) {
           <td class="act"><button class="lnk" data-edit="${b.id}">Bearbeiten</button><button class="lnk del" data-del="${b.id}">Löschen</button></td>
         </tr>`).join("")}</tbody>
         <tfoot><tr><td colspan="2">Summe (${rows.length})</td><td class="num">${fmtEUR(t.ein)} − ${fmtEUR(t.aus)} = <b class="${t.saldo >= 0 ? "pos" : "neg"}">${fmtEUR(t.saldo)}</b></td><td colspan="5"></td></tr></tfoot>
-      </table>` : `<div class="empty">Keine Buchungen${typ || q ? " für diesen Filter" : ` in ${F.year}`}${F.konto ? " in " + esc(F.konto) : ""}.</div>`;
+      </table>` : `<div class="empty">Keine Buchungen${typ || q ? " für diesen Filter" : ` in ${fyl()}`}${F.konto ? " in " + esc(F.konto) : ""}.</div>`;
     body.querySelectorAll("[data-edit]").forEach((el) => el.addEventListener("click", () => openBookingForm(F.bookings.find((x) => x.id === el.dataset.edit))));
     body.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", () => delBooking(el.dataset.del)));
   };
@@ -453,7 +456,7 @@ function sollIstSection(typ, title, editable) {
 function renderSollIst(body) {
   body.innerHTML = `
     <div class="row-between" style="margin-bottom:6px">
-      <div class="scope-badge">Budget vs. <b>alle Konten &amp; Kassen</b> (zusammengerechnet) · ${F.year}</div>
+      <div class="scope-badge">Budget vs. <b>alle Konten &amp; Kassen</b> (zusammengerechnet) · ${fyl()}</div>
       <button class="btn sm" id="sollPdf">PDF exportieren</button>
     </div>
     <div class="note" style="margin-bottom:2px">Das <b>Budget (Soll)</b> gilt gesamt über Bankkonto und alle Kassen. Der <b>Ist-Wert</b> ist die Summe aller Buchungen (Bankkonto + Kassen) je Kostenstelle.</div>
@@ -522,7 +525,7 @@ function printSollIst() {
       #print-doc table.p .n{ text-align:right; white-space:nowrap; }
       #print-doc table.p tfoot td{ font-weight:700; border-top:2px solid ${accent}; }
     </style>
-    <h1>Soll-Ist-Vergleich ${F.year}</h1>
+    <h1>Soll-Ist-Vergleich ${fyl()}</h1>
     <div class="sub">${esc(c.name || "")} · ${esc(scopeLabel)} · erstellt ${fmtDate(todayISO())}</div>
     ${sec("einnahme", "Einnahmen")}
     ${sec("ausgabe", "Ausgaben")}`;
