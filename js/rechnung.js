@@ -3,6 +3,7 @@
 // Bezahlte Rechnungen werden als Einnahme in die EAR gebucht.
 import { sb, esc, fmtEUR, fmtDate, todayISO, uuid } from "./db.js";
 import { modal, showErr } from "./ui.js";
+import { loadKatalog, customers, products, upsertCustomerFromInvoice, upsertProductsFromPositions } from "./katalog.js";
 
 const R = { company: null, year: null, refresh: null, view: "list", invoices: [], draft: null, userId: null, err: null };
 
@@ -49,6 +50,7 @@ export async function renderRechnungen(body, company, year, refresh) {
   if (R.company && (R.company.id !== company.id || R.year !== year)) R.view = "list";
   R.company = company; R.year = year; R.refresh = refresh; R.body = body;
   if (!R.userId) { const u = await sb.auth.getUser(); R.userId = u.data && u.data.user ? u.data.user.id : null; }
+  await loadKatalog(company.id);
   if (R.view === "edit") return renderEditor();
   await loadInvoices();
   renderList();
@@ -64,18 +66,29 @@ async function loadInvoices() {
 function renderList() {
   const body = R.body;
   if (R.err) { body.innerHTML = `<div class="card"><div class="msg err">${esc(R.err)}</div></div>`; return; }
-  const offen = R.invoices.filter((i) => i.status === "offen");
-  const sumOffen = offen.reduce((s, i) => s + (+i.brutto || 0), 0);
-  const sumBez = R.invoices.filter((i) => i.status === "bezahlt").reduce((s, i) => s + (+i.brutto || 0), 0);
   body.innerHTML = `
     <div class="row-between" style="margin-bottom:12px">
-      <div class="muted">${R.invoices.length} Rechnung(en) ${R.year} · offen <b class="neg">${fmtEUR(sumOffen)}</b> · bezahlt <b class="pos">${fmtEUR(sumBez)}</b></div>
+      <div class="filters">
+        <select id="fStatus"><option value="">Alle</option><option value="offen">Offen</option><option value="bezahlt">Bezahlt</option></select>
+        <input id="fSuche" placeholder="Suche Nr./Kunde/Betreff …" style="width:220px">
+      </div>
       <button class="btn primary" id="newInv">+ Neue Rechnung</button>
     </div>
-    <div class="card">${R.invoices.length ? `
+    <div class="muted" id="invSum" style="margin-bottom:10px"></div>
+    <div class="card" id="invWrap"></div>`;
+  const draw = () => {
+    const status = body.querySelector("#fStatus").value;
+    const q = body.querySelector("#fSuche").value.trim().toLowerCase();
+    let rows = R.invoices.slice();
+    if (status) rows = rows.filter((i) => i.status === status);
+    if (q) rows = rows.filter((i) => ((i.nummer || "") + " " + (i.kunde || "") + " " + (i.betreff || "")).toLowerCase().includes(q));
+    const sumOffen = R.invoices.filter((i) => i.status === "offen").reduce((s, i) => s + (+i.brutto || 0), 0);
+    const sumBez = R.invoices.filter((i) => i.status === "bezahlt").reduce((s, i) => s + (+i.brutto || 0), 0);
+    body.querySelector("#invSum").innerHTML = `${R.invoices.length} Rechnung(en) ${R.year} · offen <b class="neg">${fmtEUR(sumOffen)}</b> · bezahlt <b class="pos">${fmtEUR(sumBez)}</b>`;
+    body.querySelector("#invWrap").innerHTML = rows.length ? `
       <table class="tbl">
         <thead><tr><th>Nr.</th><th>Datum</th><th>Kunde</th><th>Betreff</th><th class="num">Brutto</th><th>Status</th><th></th></tr></thead>
-        <tbody>${R.invoices.map((i) => `<tr>
+        <tbody>${rows.map((i) => `<tr>
           <td><b>${esc(i.nummer || "")}</b></td><td>${fmtDate(i.datum)}</td><td>${esc(i.kunde || "")}</td>
           <td>${esc(i.betreff || "")}</td><td class="num">${fmtEUR(i.brutto)}</td>
           <td><span class="pill ${i.status === "bezahlt" ? "einnahme" : "ausgabe"}">${i.status === "bezahlt" ? "bezahlt" : "offen"}</span></td>
@@ -85,13 +98,16 @@ function renderList() {
             ${i.status === "offen" ? `<button class="lnk" data-paid="${i.id}">bezahlt</button>` : ""}
             <button class="lnk del" data-del="${i.id}">Löschen</button>
           </td></tr>`).join("")}</tbody>
-      </table>` : `<div class="empty">Noch keine Rechnungen in ${R.year}. Lege die erste mit „+ Neue Rechnung" an.</div>`}
-    </div>`;
+      </table>` : `<div class="empty">${R.invoices.length ? "Keine Treffer für diesen Filter." : `Noch keine Rechnungen in ${R.year}. Lege die erste mit „+ Neue Rechnung" an.`}</div>`;
+    body.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => startEditor(R.invoices.find((x) => x.id === el.dataset.open))));
+    body.querySelectorAll("[data-print]").forEach((el) => el.addEventListener("click", () => printInvoice(R.invoices.find((x) => x.id === el.dataset.print))));
+    body.querySelectorAll("[data-paid]").forEach((el) => el.addEventListener("click", () => markPaid(R.invoices.find((x) => x.id === el.dataset.paid))));
+    body.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", () => delInvoice(el.dataset.del)));
+  };
   body.querySelector("#newInv").addEventListener("click", () => startEditor(null));
-  body.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => startEditor(R.invoices.find((x) => x.id === el.dataset.open))));
-  body.querySelectorAll("[data-print]").forEach((el) => el.addEventListener("click", () => printInvoice(R.invoices.find((x) => x.id === el.dataset.print))));
-  body.querySelectorAll("[data-paid]").forEach((el) => el.addEventListener("click", () => markPaid(R.invoices.find((x) => x.id === el.dataset.paid))));
-  body.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", () => delInvoice(el.dataset.del)));
+  body.querySelector("#fStatus").addEventListener("change", draw);
+  body.querySelector("#fSuche").addEventListener("input", draw);
+  draw();
 }
 
 // ---------- Editor ----------
@@ -156,6 +172,7 @@ function renderEditor() {
     <div class="card" style="margin-top:12px">
       <h4 class="sec">Rechnungsempfänger</h4>
       <div class="form-grid">
+        <label class="col2">Aus Kundendatenbank<select id="kundeSelect"><option value="">— neuer Kunde / manuell —</option>${customers().map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label>
         <label>Name<input data-k="kunde" value="${esc(d.kunde)}"></label>
         <label>UID (falls vorhanden)<input data-k="kunde_uid" value="${esc(d.kunde_uid)}"></label>
         <label class="col2">Adresse<textarea data-k="kunde_adresse" rows="2">${esc(d.kunde_adresse)}</textarea></label>
@@ -164,6 +181,7 @@ function renderEditor() {
     </div>
     <div class="card" style="margin-top:12px">
       <h4 class="sec">Positionen</h4>
+      <datalist id="prodList">${products().map((p) => `<option value="${esc(p.bezeichnung)}"></option>`).join("")}</datalist>
       <div class="tbl-scroll"><table class="tbl pos-tbl">
         <thead><tr><th style="width:70px">Menge</th><th style="width:70px">Einheit</th><th>Bezeichnung</th><th style="width:110px" class="num">Einzelpreis</th><th style="width:80px" class="num">Rabatt %</th><th style="width:110px" class="num">Betrag</th><th></th></tr></thead>
         <tbody id="posRows">${d.positionen.map((p, i) => posRow(p, i)).join("")}</tbody>
@@ -197,14 +215,33 @@ function renderEditor() {
   b.querySelector("#addPos").addEventListener("click", () => { syncDraft(); R.draft.positionen.push(emptyPos()); renderEditor(); });
   b.querySelectorAll("[data-posdel]").forEach((el) => el.addEventListener("click", () => { syncDraft(); R.draft.positionen.splice(+el.dataset.posdel, 1); if (!R.draft.positionen.length) R.draft.positionen.push(emptyPos()); renderEditor(); }));
   b.addEventListener("input", (e) => { if (e.target.matches("[data-pk],[data-k='gesamtrabatt']")) recalc(); });
+  const kundeSel = b.querySelector("#kundeSelect");
+  if (kundeSel) kundeSel.addEventListener("change", () => applyCustomer(kundeSel.value));
+  b.addEventListener("change", (e) => { if (e.target.matches('[data-pk="bezeichnung"]')) applyProduct(e.target); });
   b.querySelector("#saveInv").addEventListener("click", () => saveInvoice(false));
   b.querySelector("#savePrint").addEventListener("click", () => saveInvoice(true));
+}
+function applyCustomer(id) {
+  const c = customers().find((x) => x.id === id);
+  if (!c) return;
+  const set = (k, v) => { const el = R.body.querySelector(`[data-k="${k}"]`); if (el) el.value = v || ""; };
+  set("kunde", c.name); set("kunde_adresse", c.adresse || ""); set("kunde_uid", c.uid || "");
+}
+function applyProduct(input) {
+  const bez = input.value.trim().toLowerCase();
+  const p = products().find((x) => (x.bezeichnung || "").trim().toLowerCase() === bez);
+  if (!p) return;
+  const row = input.closest("[data-pos]");
+  const unit = row.querySelector('[data-pk="einheit"]'), price = row.querySelector('[data-pk="einzelpreis"]');
+  if (unit && !unit.value.trim()) unit.value = p.einheit || "Stk";
+  if (price && (!price.value || +price.value === 0)) price.value = p.einzelpreis || 0;
+  recalc();
 }
 function posRow(p, i) {
   return `<tr data-pos data-i="${i}">
     <td><input class="num" data-pk="menge" type="number" step="0.01" value="${esc(p.menge)}"></td>
     <td><input data-pk="einheit" value="${esc(p.einheit || "")}"></td>
-    <td><input data-pk="bezeichnung" value="${esc(p.bezeichnung || "")}" placeholder="Leistung / Artikel"></td>
+    <td><input data-pk="bezeichnung" list="prodList" value="${esc(p.bezeichnung || "")}" placeholder="Leistung / Artikel"></td>
     <td><input class="num" data-pk="einzelpreis" type="number" step="0.01" value="${esc(p.einzelpreis)}"></td>
     <td><input class="num" data-pk="rabatt" type="number" step="0.01" min="0" value="${esc(p.rabatt || 0)}"></td>
     <td class="num linesum">${fmtEUR(lineNet(p))}</td>
@@ -243,6 +280,8 @@ async function saveInvoice(thenPrint) {
   else { rec.status = "offen"; rec.created_by = R.userId; ({ data: saved, error } = await sb.from("invoices").insert(rec).select().single()); }
   if (error) { showErr(R.body, error.message, "inv_err"); btnIds.forEach((x) => x && (x.disabled = false)); return; }
   if (!R.editId) await bumpNumbering(c, d.nummer);
+  // Kunde & Produkte automatisch in den Katalog übernehmen
+  try { await upsertCustomerFromInvoice(c.id, d); await upsertProductsFromPositions(c.id, t.pos); await loadKatalog(c.id, true); } catch (e) { /* nicht blockierend */ }
   R.view = "list"; R.editId = null;
   await loadInvoices();
   renderList();

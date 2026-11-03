@@ -5,6 +5,7 @@ import { parseFile } from "./pdfimport.js";
 import { modal, closeModal, showErr } from "./ui.js";
 import { renderRechnungen } from "./rechnung.js";
 import { renderStammdaten } from "./stammdaten.js";
+import { renderKunden, renderProdukte } from "./katalog.js";
 
 const F = {
   companies: [], companyId: null,
@@ -18,6 +19,8 @@ const TABS = [
   { id: "uebersicht", label: "Übersicht (EAR)" },
   { id: "buchungen", label: "Buchungen" },
   { id: "rechnungen", label: "Rechnungen" },
+  { id: "kunden", label: "Kunden" },
+  { id: "produkte", label: "Produkte" },
   { id: "import", label: "Kontoauszug einlesen" },
   { id: "sollist", label: "Soll-Ist" },
   { id: "kostenstellen", label: "Kostenstellen" },
@@ -134,6 +137,8 @@ function renderTab() {
   if (F.err) { body.innerHTML = schemaHint("Fehler: " + F.err); return; }
   if (F.tab === "buchungen") return renderBuchungen(body);
   if (F.tab === "rechnungen") return renderRechnungen(body, company(), F.year, async () => { await loadData(); });
+  if (F.tab === "kunden") return renderKunden(body, company(), () => {});
+  if (F.tab === "produkte") return renderProdukte(body, company(), () => {});
   if (F.tab === "import") return renderImport(body);
   if (F.tab === "sollist") return renderSollIst(body);
   if (F.tab === "kostenstellen") return renderKostenstellen(body);
