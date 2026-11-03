@@ -1,6 +1,6 @@
 // Mitgliederbereich (SC Weiz): Mitglieder verwalten, Online-Anmeldungen freischalten,
 // Zahlungseingänge (SEPA/Überweisung/Bar) je Mitglied, Bezahlt-Übersicht, Mitgliederbrief.
-import { sb, esc, fmtEUR, fmtDate, todayISO } from "./db.js";
+import { sb, esc, fmtEUR, fmtDate, todayISO, fyStartMonth, fyLabel, currentFYStartYear } from "./db.js";
 import { modal, showErr } from "./ui.js";
 
 const SCW_KEY = "scw";
@@ -11,13 +11,14 @@ export async function renderMitglieder(body) {
   M.body = body;
   body.innerHTML = `<h2 class="page-title">Mitglieder</h2><div class="page-sub">SC Weiz</div><div class="empty">Lädt …</div>`;
   if (!M.userId) { const u = await sb.auth.getUser(); M.userId = u.data && u.data.user ? u.data.user.id : null; }
-  const { data: cos, error } = await sb.from("companies").select("id,name,key").eq("key", SCW_KEY);
+  const { data: cos, error } = await sb.from("companies").select("id,name,key,design").eq("key", SCW_KEY);
   if (error) { body.innerHTML = `<div class="card"><div class="msg err">${esc(error.message)}</div></div>`; return; }
   if (!cos || !cos.length) {
     body.innerHTML = `<h2 class="page-title">Mitglieder</h2><div class="card"><div class="empty">Der Mitgliederbereich ist für <b>SC Weiz</b> gedacht. Dein Zugang ist dafür nicht freigeschaltet.</div></div>`;
     return;
   }
   M.company = cos[0];
+  if (!M._init) { M.year = currentFYStartYear(fyStartMonth(M.company)); M._init = true; }
   await loadData();
   if (M.err) { body.innerHTML = `<div class="card"><div class="msg err">Konnte Mitglieder nicht laden: ${esc(M.err)}</div><p class="note">Falls die Tabellen fehlen: <code>supabase/schema_mitglieder.sql</code> im Supabase-SQL-Editor ausführen.</p></div>`; return; }
   renderMain();
@@ -36,7 +37,12 @@ async function loadData() {
 
 // ---------- Berechnungen ----------
 const fullName = (m) => `${m.nachname || ""}${m.nachname && m.vorname ? ", " : ""}${m.vorname || ""}`.trim() || "(ohne Namen)";
-const paymentsOf = (id, year) => M.payments.filter((p) => p.member_id === id && (year == null || (p.jahr || new Date(p.datum).getFullYear()) === year));
+// Beitragsjahr = Wirtschaftsjahr von SC Weiz (Start-Jahr, z. B. 2026 = 2026/2027)
+const fyStart = () => fyStartMonth(M.company);
+const fyl = (y = M.year) => fyLabel(y, fyStart());
+function fyOfDate(d) { const dt = new Date(d), y = dt.getFullYear(), m = dt.getMonth() + 1, s = fyStart(); return s === 1 || m >= s ? y : y - 1; }
+const payYear = (p) => (p.jahr != null ? p.jahr : fyOfDate(p.datum));
+const paymentsOf = (id, year) => M.payments.filter((p) => p.member_id === id && (year == null || payYear(p) === year));
 const paidSum = (id, year) => paymentsOf(id, year).reduce((s, p) => s + (+p.betrag || 0), 0);
 function payStatus(m) {
   const paid = paidSum(m.id, M.year), beitrag = +m.beitrag || 0;
@@ -50,7 +56,7 @@ function renderMain() {
   const aktiv = M.members.filter((m) => m.status === "aktiv");
   const pending = M.members.filter((m) => m.status === "offen");
   const bezahlt = aktiv.filter((m) => payStatus(m) === "bezahlt").length;
-  const einnahmen = M.payments.filter((p) => (p.jahr || new Date(p.datum).getFullYear()) === M.year).reduce((s, p) => s + (+p.betrag || 0), 0);
+  const einnahmen = M.payments.filter((p) => payYear(p) === M.year).reduce((s, p) => s + (+p.betrag || 0), 0);
   const offenBetrag = aktiv.reduce((s, m) => { const b = +m.beitrag || 0, p = paidSum(m.id, M.year); return s + (b > p ? b - p : 0); }, 0);
   body.innerHTML = `
     <div class="fin-head">
@@ -62,8 +68,8 @@ function renderMain() {
     <div class="stat-row">
       ${stat("Mitglieder", String(M.members.length), "plain")}
       ${stat("Aktiv", String(aktiv.length), "plain")}
-      ${stat(`Bezahlt ${M.year}`, `${bezahlt}/${aktiv.length}`, "good")}
-      ${stat(`Einnahmen ${M.year}`, fmtEUR(einnahmen), "good")}
+      ${stat(`Bezahlt ${fyl()}`, `${bezahlt}/${aktiv.length}`, "good")}
+      ${stat(`Einnahmen ${fyl()}`, fmtEUR(einnahmen), "good")}
       ${stat("Offen", fmtEUR(offenBetrag), offenBetrag > 0 ? "crit" : "good")}
     </div>
     <div class="row-between" style="margin:16px 0 12px">
@@ -90,9 +96,9 @@ function renderMain() {
   body.querySelector("#fSuche").addEventListener("input", drawTable);
   drawTable();
 }
-function yearOpts() {
-  const now = new Date().getFullYear(); let o = "";
-  for (let y = now + 1; y >= now - 4; y--) o += `<option value="${y}" ${y === M.year ? "selected" : ""}>${y}</option>`;
+function yearOpts(selected = M.year) {
+  const s = fyStart(), cur = currentFYStartYear(s); let o = "";
+  for (let y = cur + 1; y >= cur - 4; y--) o += `<option value="${y}" ${y === selected ? "selected" : ""}>${fyLabel(y, s)}</option>`;
   return o;
 }
 function stat(label, value, tone) { return `<div class="stat ${tone}"><div class="stat-l">${esc(label)}</div><div class="stat-v">${esc(value)}</div></div>`; }
@@ -108,7 +114,7 @@ function drawTable() {
   const stPill = { aktiv: '<span class="pill einnahme">aktiv</span>', offen: '<span class="pill warn">neu</span>', inaktiv: '<span class="muted">inaktiv</span>' };
   body.querySelector("#mTable").innerHTML = rows.length ? `
     <div class="tbl-scroll"><table class="tbl">
-      <thead><tr><th>Name</th><th>Kontakt</th><th>Status</th><th>Typ</th><th class="num">Beitrag</th><th>Zahlart</th><th>Bezahlt ${M.year}</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Kontakt</th><th>Status</th><th>Typ</th><th class="num">Beitrag</th><th>Zahlart</th><th>Bezahlt ${fyl()}</th><th></th></tr></thead>
       <tbody>${rows.map((m) => `<tr>
         <td><b>${esc(fullName(m))}</b>${m.quelle === "online" ? ' <span class="tag">online</span>' : ""}</td>
         <td>${esc(m.email || "")}${m.tel ? "<br><span class='muted'>" + esc(m.tel) + "</span>" : ""}</td>
@@ -210,7 +216,7 @@ function editMember(m) {
 function recordPayment(m) {
   const paid = paidSum(m.id, M.year), rest = Math.max(0, (+m.beitrag || 0) - paid);
   const el = modal(`Zahlung · ${fullName(m)}`, `
-    <p class="note" style="margin:0 0 12px">Beitrag ${M.year}: ${fmtEUR(m.beitrag)} · bereits bezahlt: ${fmtEUR(paid)}${rest > 0 ? " · offen: " + fmtEUR(rest) : ""}</p>
+    <p class="note" style="margin:0 0 12px">Beitrag ${fyl()}: ${fmtEUR(m.beitrag)} · bereits bezahlt: ${fmtEUR(paid)}${rest > 0 ? " · offen: " + fmtEUR(rest) : ""}</p>
     <div class="form-grid">
       <label>Datum<input id="p_datum" type="date" value="${todayISO()}"></label>
       <label>Betrag (€)<input id="p_betrag" type="number" step="0.01" value="${rest || m.beitrag || ""}"></label>
@@ -218,7 +224,7 @@ function recordPayment(m) {
         <option value="${m.zahlart}">${ZA[m.zahlart]}</option>
         ${Object.entries(ZA).filter(([k]) => k !== m.zahlart).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
       </select></label>
-      <label>Beitragsjahr<input id="p_jahr" type="number" value="${M.year}"></label>
+      <label>Beitragsjahr<select id="p_jahr">${yearOpts()}</select></label>
       <label class="col2">Notiz<input id="p_notiz" placeholder="optional"></label>
     </div>
     <div id="m_err" class="msg err" hidden></div>
@@ -247,7 +253,7 @@ function paymentsHtml(memberId) {
   const ps = M.payments.filter((p) => p.member_id === memberId).sort((a, b) => (b.datum > a.datum ? 1 : -1));
   if (!ps.length) return `<div class="muted" style="font-size:12.5px">Noch keine Zahlungen erfasst.</div>`;
   return `<table class="tbl"><tbody>${ps.map((p) => `<tr>
-    <td>${fmtDate(p.datum)}</td><td>${ZA[p.zahlart] || ""}</td><td class="muted">${esc(String(p.jahr || ""))}</td>
+    <td>${fmtDate(p.datum)}</td><td>${ZA[p.zahlart] || ""}</td><td class="muted">${fyl(payYear(p))}</td>
     <td class="num pos">${fmtEUR(p.betrag)}</td>
     <td class="act"><button class="lnk del" data-pdel="${p.id}">×</button></td></tr>`).join("")}</tbody></table>`;
 }
