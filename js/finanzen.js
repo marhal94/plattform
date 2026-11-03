@@ -2,6 +2,9 @@
 // Kontoauszug-PDF-Import, Soll-Ist-Vergleich, Kostenstellen.
 import { sb, esc, fmtEUR, fmtNum, fmtDate, todayISO, uuid } from "./db.js";
 import { parseFile } from "./pdfimport.js";
+import { modal, closeModal, showErr } from "./ui.js";
+import { renderRechnungen } from "./rechnung.js";
+import { renderStammdaten } from "./stammdaten.js";
 
 const F = {
   companies: [], companyId: null,
@@ -14,9 +17,11 @@ const F = {
 const TABS = [
   { id: "uebersicht", label: "Übersicht (EAR)" },
   { id: "buchungen", label: "Buchungen" },
+  { id: "rechnungen", label: "Rechnungen" },
   { id: "import", label: "Kontoauszug einlesen" },
   { id: "sollist", label: "Soll-Ist" },
   { id: "kostenstellen", label: "Kostenstellen" },
+  { id: "stammdaten", label: "Stammdaten" },
 ];
 
 const schemaHint = (msg) => `<div class="card"><div class="msg err">${esc(msg)}</div>
@@ -24,7 +29,8 @@ const schemaHint = (msg) => `<div class="card"><div class="msg err">${esc(msg)}<
 
 // ---------- Datenzugriff ----------
 async function loadCompanies() {
-  const { data, error } = await sb.from("companies").select("id,key,name,form,plz,ort,tax_mode,design,umsatzziel").order("name");
+  // alle Spalten: Rechnungen/Stammdaten/QR brauchen numbering, iban, bic, Adresse, logo …
+  const { data, error } = await sb.from("companies").select("*").order("name");
   if (error) return error.message;
   F.companies = data || [];
   return null;
@@ -127,10 +133,20 @@ function renderTab() {
   const body = F.root.querySelector("#finBody");
   if (F.err) { body.innerHTML = schemaHint("Fehler: " + F.err); return; }
   if (F.tab === "buchungen") return renderBuchungen(body);
+  if (F.tab === "rechnungen") return renderRechnungen(body, company(), F.year, async () => { await loadData(); });
   if (F.tab === "import") return renderImport(body);
   if (F.tab === "sollist") return renderSollIst(body);
   if (F.tab === "kostenstellen") return renderKostenstellen(body);
+  if (F.tab === "stammdaten") return renderStammdaten(body, company(), reloadAll);
   return renderUebersicht(body);
+}
+
+async function reloadAll() {
+  F.companies = [];
+  await loadCompanies();
+  if (!F.companies.some((c) => c.id === F.companyId)) F.companyId = F.companies[0] && F.companies[0].id;
+  await loadData();
+  renderShell();
 }
 
 // ---------- Übersicht (EAR) ----------
@@ -428,21 +444,4 @@ function ksListHtml() {
   return F.costCenters.map((c) => `<div class="ks-row"><span>${esc(c.name)}</span><button class="lnk del" data-ksdel="${c.id}">entfernen</button></div>`).join("");
 }
 
-// ---------- Mini-Modal ----------
-function modal(title, inner, actions) {
-  const back = document.createElement("div");
-  back.className = "modal-back";
-  back.innerHTML = `<div class="modal"><div class="modal-head"><h3>${esc(title)}</h3><button class="modal-x" aria-label="Schließen">✕</button></div>
-    <div class="modal-body">${inner}</div>
-    <div class="modal-foot">${actions.map((a) => `<button class="${a.cls}" ${a.id ? `id="${a.id}"` : ""} ${a.close ? 'data-close="1"' : ""}>${esc(a.label)}</button>`).join("")}</div></div>`;
-  document.body.appendChild(back);
-  const close = () => closeModal(back);
-  back.querySelector(".modal-x").addEventListener("click", close);
-  back.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", close));
-  let downOnBack = false;
-  back.addEventListener("mousedown", (e) => { downOnBack = e.target === back; });
-  back.addEventListener("mouseup", (e) => { if (downOnBack && e.target === back) close(); });
-  return back;
-}
-function closeModal(el) { el.remove(); }
-function showErr(el, msg) { const e = el.querySelector("#m_err"); if (e) { e.textContent = msg; e.hidden = false; } }
+// (Modal/Fehler-Helfer liegen in ui.js)

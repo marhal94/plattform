@@ -143,3 +143,24 @@ label.inline select{min-width:150px;}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
 .form-grid .col2{grid-column:1 / -1;}
 @media(max-width:560px){.form-grid{grid-template-columns:1fr;}.barcol{width:120px;}}
+
+/* Rechnungs-Editor / Stammdaten */
+h4.sec{font-family:var(--serif);font-size:14px;font-weight:600;margin:4px 0 10px;color:var(--ink-soft);border-bottom:1px solid var(--line);padding-bottom:6px;}
+.card h4.sec:not(:first-child){margin-top:20px;}
+.pos-tbl input{padding:7px 8px;font-size:13px;}
+.pos-tbl td{padding:5px 6px;}
+.linesum{font-variant-numeric:tabular-nums;white-space:nowrap;}
+.sums{max-width:340px;margin-left:auto;margin-top:14px;font-size:14px;}
+.sums>div{display:flex;justify-content:space-between;align-items:center;padding:4px 0;}
+.sums .rabrow input{display:inline-block;margin:0 4px;}
+.sums .total{border-top:2px solid var(--line-strong);margin-top:6px;padding-top:8px;font-size:17px;font-weight:700;color:var(--brand);}
+.sums .total b{color:var(--brand);}
+
+/* Druck */
+#print-doc{display:none;}
+@media print{
+  :root{color-scheme:light;}
+  body{background:#fff;}
+  #app{display:none !important;}
+  #print-doc{display:block !important;}
+}
