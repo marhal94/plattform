@@ -71,22 +71,15 @@
       </label>
     </div>
 
-    <h2>Zahlungsart</h2>
-    <div class="pay" id="pay">
-      <label class="on"><input type="radio" name="zahlart" value="sepa" checked> SEPA-Lastschrift</label>
-      <label><input type="radio" name="zahlart" value="ueberweisung"> Überweisung</label>
-      <label><input type="radio" name="zahlart" value="bar"> Bar</label>
+    <h2>Zahlung per SEPA-Lastschrift</h2>
+    <p class="note" style="margin:-4px 0 12px">Der Mitgliedsbeitrag wird per SEPA-Lastschrift von deinem Konto eingezogen.</p>
+    <div class="grid">
+      <label class="col2">Kontoinhaber*<input name="sepa_inhaber" required></label>
+      <label class="col2">IBAN*<input name="sepa_iban" placeholder="AT.." required></label>
+      <label>BIC<input name="sepa_bic"></label>
     </div>
-
-    <div id="sepaBox">
-      <div class="grid" style="margin-top:12px">
-        <label class="col2">Kontoinhaber*<input name="sepa_inhaber"></label>
-        <label class="col2">IBAN*<input name="sepa_iban" placeholder="AT.."></label>
-        <label>BIC<input name="sepa_bic"></label>
-      </div>
-      <div class="consent"><input type="checkbox" id="mandat" name="mandat">
-        <span>Ich ermächtige den SC Weiz, den Mitgliedsbeitrag per SEPA-Lastschrift von meinem Konto einzuziehen, und weise mein Kreditinstitut an, die Lastschriften einzulösen (SEPA-Lastschriftmandat).</span></div>
-    </div>
+    <div class="consent"><input type="checkbox" id="mandat" name="mandat" required>
+      <span>Ich ermächtige den SC Weiz, den Mitgliedsbeitrag per SEPA-Lastschrift von meinem Konto einzuziehen, und weise mein Kreditinstitut an, die Lastschriften einzulösen (SEPA-Lastschriftmandat).*</span></div>
 
     <div class="consent"><input type="checkbox" id="dsgvo" name="dsgvo" required>
       <span>Ich stimme zu, dass meine Daten zur Mitgliederverwaltung gespeichert und verarbeitet werden (DSGVO). Ich kann dem jederzeit widersprechen.*</span></div>
@@ -111,17 +104,8 @@
   const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   const form = document.getElementById("form");
-  const pay = document.getElementById("pay");
-  const sepaBox = document.getElementById("sepaBox");
   const errEl = document.getElementById("err");
   const showErr = (m) => { errEl.textContent = m; errEl.hidden = false; };
-
-  // Zahlart-Auswahl hervorheben + SEPA-Felder ein/ausblenden
-  pay.addEventListener("change", () => {
-    const val = form.zahlart.value;
-    [...pay.querySelectorAll("label")].forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
-    sepaBox.hidden = val !== "sepa";
-  });
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -129,24 +113,20 @@
     if (form.website.value) return; // Honeypot (Spam)
     const f = Object.fromEntries(new FormData(form).entries());
     if (!f.dsgvo) { showErr("Bitte der Datenverarbeitung zustimmen."); return; }
-    if (f.zahlart === "sepa") {
-      if (!f.sepa_inhaber || !f.sepa_iban) { showErr("Für SEPA bitte Kontoinhaber und IBAN angeben."); return; }
-      if (!f.mandat) { showErr("Bitte das SEPA-Lastschriftmandat bestätigen."); return; }
-    }
+    if (!f.sepa_inhaber || !f.sepa_iban) { showErr("Bitte Kontoinhaber und IBAN für die SEPA-Lastschrift angeben."); return; }
+    if (!f.mandat) { showErr("Bitte das SEPA-Lastschriftmandat bestätigen."); return; }
     const btn = document.getElementById("submit"); btn.disabled = true; btn.textContent = "Wird gesendet …";
     const rec = {
       company_id: SCW_ID, status: "offen", quelle: "online",
       vorname: f.vorname?.trim(), nachname: f.nachname?.trim(),
       email: f.email?.trim() || null, tel: f.tel?.trim() || null,
       strasse: f.strasse?.trim() || null, plz: f.plz?.trim() || null, ort: f.ort?.trim() || null,
-      geburtsdatum: f.geburtsdatum || null, typ: f.typ || null, zahlart: f.zahlart,
+      geburtsdatum: f.geburtsdatum || null, typ: f.typ || null, zahlart: "sepa",
+      sepa_inhaber: f.sepa_inhaber.trim(),
+      sepa_iban: (f.sepa_iban || "").replace(/\s/g, ""),
+      sepa_bic: f.sepa_bic?.trim() || null,
+      sepa_mandat_datum: new Date().toISOString().slice(0, 10),
     };
-    if (f.zahlart === "sepa") {
-      rec.sepa_inhaber = f.sepa_inhaber.trim();
-      rec.sepa_iban = (f.sepa_iban || "").replace(/\s/g, "");
-      rec.sepa_bic = f.sepa_bic?.trim() || null;
-      rec.sepa_mandat_datum = new Date().toISOString().slice(0, 10);
-    }
     const { error } = await sb.from("members").insert(rec);
     if (error) { showErr("Leider ist etwas schiefgelaufen: " + error.message); btn.disabled = false; btn.textContent = "Mitgliedschaft beantragen"; return; }
     document.getElementById("form").hidden = true;
