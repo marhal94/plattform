@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SC Weiz · Mitglied werden</title>
+<style>
+  :root{ --brand:#184437; --brand2:#2C6A57; --ink:#1A211C; --soft:#4C544D; --faint:#7C8279;
+    --line:#E0DCCF; --surface:#FBFAF6; --ground:#F3F1EA; --good:#2C7A57; --good-bg:#E3EFE7; --crit:#A63F38; --crit-bg:#F4E1DE;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; --serif:"Iowan Old Style",Palatino,Georgia,serif; }
+  *{box-sizing:border-box;}
+  body{margin:0;background:linear-gradient(160deg,var(--ground),#e9e7dd);color:var(--ink);font-family:var(--sans);line-height:1.5;padding:24px;}
+  .wrap{max-width:640px;margin:0 auto;}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;box-shadow:0 10px 30px -14px rgba(24,40,32,.3);padding:26px;}
+  .head{display:flex;align-items:center;gap:14px;margin-bottom:6px;}
+  .crest{width:46px;height:46px;border-radius:12px;flex:none;background:linear-gradient(155deg,var(--brand),var(--brand2));display:grid;place-items:center;color:#fff;}
+  .crest svg{width:26px;height:26px;}
+  .eyebrow{font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);font-weight:700;}
+  h1{font-family:var(--serif);font-size:23px;margin:1px 0 0;}
+  .lead{color:var(--soft);font-size:14px;margin:14px 0 20px;}
+  h2{font-family:var(--serif);font-size:15px;margin:22px 0 10px;border-bottom:1px solid var(--line);padding-bottom:6px;color:var(--soft);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:13px;}
+  .grid .col2{grid-column:1 / -1;}
+  label{display:block;font-size:12px;font-weight:600;color:var(--soft);margin-bottom:5px;}
+  input,select{width:100%;font-family:var(--sans);font-size:14px;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:9px;padding:10px 12px;}
+  input:focus,select:focus{outline:none;border-color:var(--brand2);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 18%,transparent);}
+  .pay{display:flex;gap:10px;flex-wrap:wrap;}
+  .pay label{flex:1;min-width:120px;border:1px solid var(--line);border-radius:10px;padding:12px;cursor:pointer;display:flex;align-items:center;gap:8px;margin:0;font-weight:600;color:var(--ink);background:#fff;}
+  .pay input{width:auto;}
+  .pay label.on{border-color:var(--brand);background:var(--good-bg);}
+  .consent{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--soft);margin-top:12px;}
+  .consent input{width:auto;margin-top:3px;}
+  .btn{appearance:none;border:none;background:var(--brand);color:#fff;font:700 15px var(--sans);padding:13px 18px;border-radius:10px;cursor:pointer;width:100%;margin-top:18px;}
+  .btn:hover{background:var(--brand2);}
+  .btn:disabled{opacity:.6;cursor:default;}
+  .msg{border-radius:9px;padding:11px 13px;font-size:13.5px;margin-top:14px;}
+  .msg.err{background:var(--crit-bg);color:var(--crit);}
+  .note{font-size:11.5px;color:var(--faint);margin-top:8px;}
+  .hp{position:absolute;left:-9999px;}
+  .done{text-align:center;padding:20px 6px;}
+  .done .big{width:64px;height:64px;border-radius:50%;background:var(--good-bg);color:var(--good);display:grid;place-items:center;margin:0 auto 14px;font-size:30px;}
+  [hidden]{display:none!important;}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card" id="card">
+  <div class="head">
+    <div class="crest"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2l8 3v6c0 5-3.4 8.5-8 11-4.6-2.5-8-6-8-11V5l8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>
+    <div><div class="eyebrow">SC Weiz</div><h1>Mitglied werden</h1></div>
+  </div>
+  <p class="lead">Werde Teil des SC Weiz. Fülle das Formular aus — die Mitgliederbetreuung meldet sich und schaltet deine Mitgliedschaft frei.</p>
+
+  <form id="form">
+    <h2>Deine Daten</h2>
+    <div class="grid">
+      <label>Vorname*<input name="vorname" required></label>
+      <label>Nachname*<input name="nachname" required></label>
+      <label>E-Mail*<input name="email" type="email" required></label>
+      <label>Telefon<input name="tel"></label>
+      <label class="col2">Straße & Nr.<input name="strasse"></label>
+      <label>PLZ<input name="plz"></label>
+      <label>Ort<input name="ort"></label>
+      <label>Geburtsdatum<input name="geburtsdatum" type="date"></label>
+      <label>Mitgliedschaft
+        <select name="typ">
+          <option value="Aktiv">Aktiv</option>
+          <option value="Unterstützend">Unterstützend</option>
+          <option value="Jugend">Jugend</option>
+          <option value="Familie">Familie</option>
+        </select>
+      </label>
+    </div>
+
+    <h2>Zahlungsart</h2>
+    <div class="pay" id="pay">
+      <label class="on"><input type="radio" name="zahlart" value="sepa" checked> SEPA-Lastschrift</label>
+      <label><input type="radio" name="zahlart" value="ueberweisung"> Überweisung</label>
+      <label><input type="radio" name="zahlart" value="bar"> Bar</label>
+    </div>
+
+    <div id="sepaBox">
+      <div class="grid" style="margin-top:12px">
+        <label class="col2">Kontoinhaber*<input name="sepa_inhaber"></label>
+        <label class="col2">IBAN*<input name="sepa_iban" placeholder="AT.."></label>
+        <label>BIC<input name="sepa_bic"></label>
+      </div>
+      <div class="consent"><input type="checkbox" id="mandat" name="mandat">
+        <span>Ich ermächtige den SC Weiz, den Mitgliedsbeitrag per SEPA-Lastschrift von meinem Konto einzuziehen, und weise mein Kreditinstitut an, die Lastschriften einzulösen (SEPA-Lastschriftmandat).</span></div>
+    </div>
+
+    <div class="consent"><input type="checkbox" id="dsgvo" name="dsgvo" required>
+      <span>Ich stimme zu, dass meine Daten zur Mitgliederverwaltung gespeichert und verarbeitet werden (DSGVO). Ich kann dem jederzeit widersprechen.*</span></div>
+
+    <input class="hp" name="website" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <div id="err" class="msg err" hidden></div>
+    <button class="btn" id="submit" type="submit">Mitgliedschaft beantragen</button>
+    <p class="note">* Pflichtfelder. Deine Daten werden ausschließlich vom SC Weiz zur Mitgliederverwaltung verwendet.</p>
+  </form>
+
+  <div class="done" id="done" hidden>
+    <div class="big">✓</div>
+    <h1 style="font-size:20px">Danke für deine Anmeldung!</h1>
+    <p class="lead" style="margin-top:10px">Deine Daten sind beim SC Weiz eingegangen. Die Mitgliederbetreuung meldet sich in Kürze bei dir.</p>
+  </div>
+</div></div>
+
+<script type="module">
+  import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+  import { SUPABASE_URL, SUPABASE_ANON_KEY } from "./js/config.js";
+  const SCW_ID = "aeb530d3-c5ee-4ed3-9289-1bf16bf01949"; // SC Weiz
+  const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const form = document.getElementById("form");
+  const pay = document.getElementById("pay");
+  const sepaBox = document.getElementById("sepaBox");
+  const errEl = document.getElementById("err");
+  const showErr = (m) => { errEl.textContent = m; errEl.hidden = false; };
+
+  // Zahlart-Auswahl hervorheben + SEPA-Felder ein/ausblenden
+  pay.addEventListener("change", () => {
+    const val = form.zahlart.value;
+    [...pay.querySelectorAll("label")].forEach((l) => l.classList.toggle("on", l.querySelector("input").checked));
+    sepaBox.hidden = val !== "sepa";
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    errEl.hidden = true;
+    if (form.website.value) return; // Honeypot (Spam)
+    const f = Object.fromEntries(new FormData(form).entries());
+    if (!f.dsgvo) { showErr("Bitte der Datenverarbeitung zustimmen."); return; }
+    if (f.zahlart === "sepa") {
+      if (!f.sepa_inhaber || !f.sepa_iban) { showErr("Für SEPA bitte Kontoinhaber und IBAN angeben."); return; }
+      if (!f.mandat) { showErr("Bitte das SEPA-Lastschriftmandat bestätigen."); return; }
+    }
+    const btn = document.getElementById("submit"); btn.disabled = true; btn.textContent = "Wird gesendet …";
+    const rec = {
+      company_id: SCW_ID, status: "offen", quelle: "online",
+      vorname: f.vorname?.trim(), nachname: f.nachname?.trim(),
+      email: f.email?.trim() || null, tel: f.tel?.trim() || null,
+      strasse: f.strasse?.trim() || null, plz: f.plz?.trim() || null, ort: f.ort?.trim() || null,
+      geburtsdatum: f.geburtsdatum || null, typ: f.typ || null, zahlart: f.zahlart,
+    };
+    if (f.zahlart === "sepa") {
+      rec.sepa_inhaber = f.sepa_inhaber.trim();
+      rec.sepa_iban = (f.sepa_iban || "").replace(/\s/g, "");
+      rec.sepa_bic = f.sepa_bic?.trim() || null;
+      rec.sepa_mandat_datum = new Date().toISOString().slice(0, 10);
+    }
+    const { error } = await sb.from("members").insert(rec);
+    if (error) { showErr("Leider ist etwas schiefgelaufen: " + error.message); btn.disabled = false; btn.textContent = "Mitgliedschaft beantragen"; return; }
+    document.getElementById("form").hidden = true;
+    document.getElementById("done").hidden = false;
+    window.scrollTo(0, 0);
+  });
+</script>
+</body>
+</html>

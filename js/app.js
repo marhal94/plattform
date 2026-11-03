@@ -1,5 +1,6 @@
 import { sb, configured, esc } from "./db.js";
 import { renderFinanzen } from "./finanzen.js";
+import { renderMitglieder } from "./mitglieder.js";
 
 const app = document.getElementById("app");
 const CREST = '<div class="crest" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 2l8 3v6c0 5-3.4 8.5-8 11-4.6-2.5-8-6-8-11V5l8-3z"/><path d="M9 12l2 2 4-4"/></svg></div>';
@@ -72,7 +73,7 @@ function renderLogin(msg) {
 const PAGES = [
   { id: "cockpit", label: "Cockpit" },
   { id: "finanzen", label: "Finanzen" },
-  { id: "mitglieder", label: "Mitglieder", soon: true },
+  { id: "mitglieder", label: "Mitglieder" },
   { id: "kommunikation", label: "Kommunikation", soon: true },
   { id: "social", label: "Social Media", soon: true },
 ];
@@ -104,6 +105,7 @@ function renderApp() {
 async function renderPage() {
   const body = document.getElementById("pageBody");
   if (state.page === "finanzen") return renderFinanzen(body);
+  if (state.page === "mitglieder") return renderMitglieder(body);
   // default: cockpit
   body.innerHTML = `<h2 class="page-title">Cockpit</h2><div class="page-sub">Überblick über Finanzen, Mitglieder und Kommunikation.</div>
     <div class="card"><div class="empty">Die Kennzahlen-Übersicht wird hier aufgebaut, sobald Finanzen & Mitglieder befüllt sind.</div></div>`;
