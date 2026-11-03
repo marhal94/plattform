@@ -1,8 +1,20 @@
 -- ============================================================
 -- TecnoFutbol Plattform — Finanzen (Einnahmen-Ausgaben-Rechnung)
 -- Ergänzung zu schema.sql. Im Supabase SQL-Editor einfügen und ausführen.
--- Baut auf has_company_access() aus schema.sql auf.
+-- Selbstständig lauffähig: legt die Hilfsfunktionen sicherheitshalber neu an.
 -- ============================================================
+
+-- ---------- Hilfsfunktionen sicherstellen (idempotent) ----------
+create or replace function public.is_admin()
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role = 'admin');
+$$;
+
+create or replace function public.has_company_access(cid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.is_admin()
+      or exists (select 1 from public.company_access where user_id = auth.uid() and company_id = cid);
+$$;
 
 -- ---------- Kostenstellen (je Unternehmen, wiederverwendbar) ----------
 create table if not exists public.cost_centers (
@@ -26,7 +38,7 @@ create table if not exists public.bookings (
   kategorie text,
   quelle text not null default 'manuell' check (quelle in ('manuell','pdf-import','rechnung')),
   beleg_url text,
-  invoice_id uuid references public.invoices(id) on delete set null,
+  invoice_id uuid,                                      -- optionale Verknüpfung zu einer Rechnung
   import_batch uuid,                                    -- gruppiert einen PDF-Import
   created_by uuid references auth.users(id),
   created_at timestamptz not null default now()
@@ -61,3 +73,6 @@ create policy bk_all on public.bookings for all
 drop policy if exists bg_all on public.budgets;
 create policy bg_all on public.budgets for all
   using (public.has_company_access(company_id)) with check (public.has_company_access(company_id));
+
+-- ---------- PostgREST-Schema-Cache sofort aktualisieren ----------
+notify pgrst, 'reload schema';

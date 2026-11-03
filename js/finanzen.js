@@ -25,8 +25,9 @@ const schemaHint = (msg) => `<div class="card"><div class="msg err">${esc(msg)}<
 // ---------- Datenzugriff ----------
 async function loadCompanies() {
   const { data, error } = await sb.from("companies").select("id,key,name,form,plz,ort,tax_mode,design,umsatzziel").order("name");
-  if (error) { F.err = error.message; return; }
+  if (error) return error.message;
   F.companies = data || [];
+  return null;
 }
 async function loadData() {
   F.err = null;
@@ -70,9 +71,16 @@ const sollFor = (kostenstelle, typ) => { const r = F.budgets.find((b) => b.koste
 // ---------- Haupt-Render ----------
 export async function renderFinanzen(root) {
   F.root = root;
+  F.err = null;
   root.innerHTML = `<h2 class="page-title">Finanzen</h2><div class="page-sub">Einnahmen-Ausgaben-Rechnung, Buchungen und Soll-Ist.</div><div class="empty">Lädt …</div>`;
-  if (!F.companies.length && !F.err) await loadCompanies();
-  if (F.err) { root.querySelector(".empty").outerHTML = schemaHint("Konnte Unternehmen nicht laden: " + F.err); return; }
+  if (!F.companies.length) {
+    const coErr = await loadCompanies();
+    if (coErr) {
+      root.querySelector(".empty").outerHTML = `<div class="card"><div class="msg err">Konnte Unternehmen nicht laden: ${esc(coErr)}</div>
+        <p class="note">Falls die Tabelle fehlt: <code>supabase/schema.sql</code> im Supabase-SQL-Editor ausführen.</p></div>`;
+      return;
+    }
+  }
   if (!F.companies.length) { root.querySelector(".empty").outerHTML = `<div class="empty">Noch keine Unternehmen freigeschaltet.</div>`; return; }
   if (!F.companyId || !F.companies.some((c) => c.id === F.companyId)) F.companyId = F.companies[0].id;
   await loadData();
