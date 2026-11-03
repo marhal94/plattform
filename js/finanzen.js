@@ -13,6 +13,7 @@ const F = {
   tab: "uebersicht",
   bookings: [], costCenters: [], budgets: [], konten: [],
   konto: "", // "" = alle Konten/Kassen; sonst Name (z. B. "Handkassa")
+  showSoll: false, // Soll-Ist-Vergleich in der Übersicht einblenden
   userId: null, root: null, err: null,
 };
 const DEFAULT_KONTO = "Bankkonto";
@@ -98,13 +99,13 @@ function byKonto() {
   }
   return [...m.entries()].map(([k, v]) => ({ k, ...v, saldo: v.ein - v.aus }));
 }
+// Ist für Soll-Ist = ZUSAMMENGERECHNET über alle Konten & Kassen (Budget gilt gesamt)
 function istFor(kostenstelle, typ) {
-  return kb().filter((b) => b.typ === typ && ((b.kostenstelle || "").trim() || "(ohne Kostenstelle)") === kostenstelle)
+  return F.bookings.filter((b) => b.typ === typ && ((b.kostenstelle || "").trim() || "(ohne Kostenstelle)") === kostenstelle)
     .reduce((s, b) => s + (+b.betrag || 0), 0);
 }
-// Soll: bei gewählter Kassa genau deren Budget, bei "alle" die Summe über alle Kassen
+// Soll = globales Budget je Kostenstelle (über alle Kassen hinweg)
 function sollFor(kostenstelle, typ) {
-  if (F.konto) { const r = F.budgets.find((b) => b.kostenstelle === kostenstelle && b.typ === typ && (b.konto || DEFAULT_KONTO) === F.konto); return r ? +r.soll : 0; }
   return F.budgets.filter((b) => b.kostenstelle === kostenstelle && b.typ === typ).reduce((s, b) => s + (+b.soll || 0), 0);
 }
 
@@ -224,9 +225,19 @@ function renderUebersicht(body) {
           <td class="num ${r.saldo >= 0 ? "pos" : "neg"}">${fmtEUR(r.saldo)}</td></tr>`).join("")}</tbody>
         <tfoot><tr><td>Summe</td><td class="num pos">${fmtEUR(t.ein)}</td><td class="num neg">${fmtEUR(t.aus)}</td><td class="num ${t.saldo >= 0 ? "pos" : "neg"}">${fmtEUR(t.saldo)}</td></tr></tfoot>
       </table>` : `<div class="empty">Noch keine Buchungen in ${F.year}. Lege welche unter „Buchungen" an oder lies einen Kontoauszug ein.</div>`}
+    </div>
+    <div class="card" style="margin-top:14px">
+      <div class="row-between">
+        <h3 class="card-title">Soll-Ist-Vergleich <span class="muted" style="font-weight:400">· Budget vs. alle Konten &amp; Kassen</span></h3>
+        <button class="btn sm" id="toggleSoll">${F.showSoll ? "ausblenden" : "einblenden"}</button>
+      </div>
+      ${F.showSoll ? `<div class="note" style="margin:8px 0 0">Zusammengerechnet über Bankkonto + alle Kassen. Soll-Werte erfassen und PDF-Export im Reiter <b>Soll-Ist</b>.</div>
+        ${sollIstSection("einnahme", "Einnahmen — Soll-Ist", false)}
+        ${sollIstSection("ausgabe", "Ausgaben — Soll-Ist", false)}` : ""}
     </div>`;
   const sa = body.querySelector("#scopeAll");
   if (sa) sa.addEventListener("click", () => { F.konto = ""; renderShell(); });
+  body.querySelector("#toggleSoll").addEventListener("click", () => { F.showSoll = !F.showSoll; renderUebersicht(body); });
 }
 function stat(label, value, tone) {
   return `<div class="stat ${tone}"><div class="stat-l">${esc(label)}</div><div class="stat-v">${esc(value)}</div></div>`;
@@ -417,43 +428,38 @@ async function importRows(e) {
   F.tab = "buchungen"; F.konto = konto; await loadData(); renderShell();
 }
 
-// ---------- Soll-Ist (je Konto/Kassa) ----------
+// ---------- Soll-Ist (globales Budget vs. alle Konten & Kassen zusammengerechnet) ----------
 function sollIstCats(typ) {
-  const bk_ = kb();
   return [...new Set([
     ...F.costCenters.map((c) => c.name),
-    ...bk_.filter((b) => b.typ === typ).map((b) => (b.kostenstelle || "").trim() || "(ohne Kostenstelle)"),
-    ...F.budgets.filter((b) => b.typ === typ && (!F.konto || (b.konto || DEFAULT_KONTO) === F.konto)).map((b) => b.kostenstelle),
+    ...F.bookings.filter((b) => b.typ === typ).map((b) => (b.kostenstelle || "").trim() || "(ohne Kostenstelle)"),
+    ...F.budgets.filter((b) => b.typ === typ).map((b) => b.kostenstelle),
   ])].filter(Boolean).sort();
 }
+function sollIstSection(typ, title, editable) {
+  const names = sollIstCats(typ);
+  const rowsHtml = names.map((k) => sollIstRow(k, typ, sollFor(k, typ), istFor(k, typ), false, editable)).join("");
+  const soll = names.reduce((s, k) => s + sollFor(k, typ), 0);
+  const ist = names.reduce((s, k) => s + istFor(k, typ), 0);
+  return `<div class="card" style="margin-top:14px">
+    <h3 class="card-title" style="margin-bottom:10px">${title}</h3>
+    <table class="tbl sollist">
+      <thead><tr><th>Kostenstelle</th><th class="num">Soll (Budget)</th><th class="num">Ist (alle Kassen)</th><th class="num">Abweichung</th><th class="barcol">Erreichung</th></tr></thead>
+      <tbody>${rowsHtml || `<tr><td colspan="5" class="empty" style="padding:16px">Keine Kostenstellen. Lege welche an oder erfasse Buchungen.</td></tr>`}</tbody>
+      <tfoot>${sollIstRow("Gesamt", typ, soll, ist, true, false)}</tfoot>
+    </table>
+  </div>`;
+}
 function renderSollIst(body) {
-  const editable = !!F.konto;
-  const scopeLabel = F.konto || "Alle Konten/Kassen";
-  const section = (typ, title) => {
-    const names = sollIstCats(typ);
-    const rowsHtml = names.map((k) => sollIstRow(k, typ, sollFor(k, typ), istFor(k, typ), false, editable)).join("");
-    const soll = names.reduce((s, k) => s + sollFor(k, typ), 0);
-    const ist = names.reduce((s, k) => s + istFor(k, typ), 0);
-    return `<div class="card" style="margin-top:14px">
-      <h3 class="card-title" style="margin-bottom:10px">${title}</h3>
-      <table class="tbl sollist">
-        <thead><tr><th>Kostenstelle</th><th class="num">Soll</th><th class="num">Ist</th><th class="num">Abweichung</th><th class="barcol">Erreichung</th></tr></thead>
-        <tbody>${rowsHtml || `<tr><td colspan="5" class="empty" style="padding:16px">Keine Kostenstellen. Lege welche an oder erfasse Buchungen.</td></tr>`}</tbody>
-        <tfoot>${sollIstRow("Gesamt", typ, soll, ist, true, false)}</tfoot>
-      </table>
-    </div>`;
-  };
   body.innerHTML = `
     <div class="row-between" style="margin-bottom:6px">
-      <div class="scope-badge">Soll-Ist für <b>${esc(scopeLabel)}</b> · ${F.year}</div>
+      <div class="scope-badge">Budget vs. <b>alle Konten &amp; Kassen</b> (zusammengerechnet) · ${F.year}</div>
       <button class="btn sm" id="sollPdf">PDF exportieren</button>
     </div>
-    <div class="note" style="margin-bottom:2px">${editable
-      ? `Trage je Kostenstelle den <b>Soll-Wert (Budget)</b> für ${esc(F.konto)} ein. Der Ist-Wert wird automatisch aus den Buchungen berechnet.`
-      : `Oben eine <b>Kasse/ein Konto</b> wählen, um Soll-Werte zu erfassen. „Alle" zeigt die Summen über alle Kassen (nur Ansicht).`}</div>
-    ${section("einnahme", "Einnahmen — Soll-Ist")}
-    ${section("ausgabe", "Ausgaben — Soll-Ist")}`;
-  if (editable) body.querySelectorAll("[data-soll]").forEach((el) => el.addEventListener("change", () => saveBudget(el.dataset.soll, el.dataset.typ, el.value, el)));
+    <div class="note" style="margin-bottom:2px">Das <b>Budget (Soll)</b> gilt gesamt über Bankkonto und alle Kassen. Der <b>Ist-Wert</b> ist die Summe aller Buchungen (Bankkonto + Kassen) je Kostenstelle.</div>
+    ${sollIstSection("einnahme", "Einnahmen — Soll-Ist", true)}
+    ${sollIstSection("ausgabe", "Ausgaben — Soll-Ist", true)}`;
+  body.querySelectorAll("[data-soll]").forEach((el) => el.addEventListener("change", () => saveBudget(el.dataset.soll, el.dataset.typ, el.value, el)));
   body.querySelector("#sollPdf").addEventListener("click", () => printSollIst());
 }
 function sollIstRow(k, typ, soll, ist, isFoot, editable) {
@@ -474,12 +480,12 @@ function sollIstRow(k, typ, soll, ist, isFoot, editable) {
 }
 async function saveBudget(kostenstelle, typ, value, el) {
   const soll = parseFloat(value) || 0;
-  const konto = F.konto || DEFAULT_KONTO;
+  const konto = "ALLE"; // globales Budget (ein Wert über alle Konten/Kassen)
   const rec = { company_id: F.companyId, jahr: F.year, konto, kostenstelle, typ, soll };
   let { error } = await sb.from("budgets").upsert(rec, { onConflict: "company_id,jahr,konto,kostenstelle,typ" });
   if (error && isKontoMissing(error)) { delete rec.konto; ({ error } = await sb.from("budgets").upsert(rec, { onConflict: "company_id,jahr,kostenstelle,typ" })); }
   if (error) { el.classList.add("saveerr"); el.title = error.message; return; }
-  const existing = F.budgets.find((b) => b.kostenstelle === kostenstelle && b.typ === typ && (b.konto || DEFAULT_KONTO) === konto);
+  const existing = F.budgets.find((b) => b.kostenstelle === kostenstelle && b.typ === typ);
   if (existing) existing.soll = soll; else F.budgets.push(rec);
   el.classList.remove("saveerr"); el.classList.add("saved");
   setTimeout(() => el.classList.remove("saved"), 900);
@@ -489,7 +495,7 @@ async function saveBudget(kostenstelle, typ, value, el) {
 // ---------- Soll-Ist als PDF ----------
 function printSollIst() {
   const c = company();
-  const scopeLabel = F.konto || "Alle Konten/Kassen";
+  const scopeLabel = "Budget vs. alle Konten & Kassen (zusammengerechnet)";
   const sec = (typ, title) => {
     const names = sollIstCats(typ);
     const body = names.map((k) => {
