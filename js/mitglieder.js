@@ -79,6 +79,7 @@ function renderMain() {
         <input id="fSuche" placeholder="Suche Name/E-Mail …" style="width:200px">
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn sm" id="btnImport">Excel importieren</button>
         <button class="btn sm" id="btnLink">Anmelde-Link</button>
         <button class="btn sm" id="btnBrief">Mitgliederbrief</button>
         <button class="btn primary" id="btnNew">+ Mitglied</button>
@@ -90,6 +91,7 @@ function renderMain() {
     <div class="card" id="mTable"></div>`;
   body.querySelector("#mYear").addEventListener("change", (e) => { M.year = +e.target.value; renderMain(); });
   body.querySelector("#btnNew").addEventListener("click", () => editMember(null));
+  body.querySelector("#btnImport").addEventListener("click", startImport);
   body.querySelector("#btnLink").addEventListener("click", showLink);
   body.querySelector("#btnBrief").addEventListener("click", showBrief);
   ["#fStatus", "#fZahl"].forEach((s) => body.querySelector(s).addEventListener("change", drawTable));
@@ -297,4 +299,237 @@ function showBrief() {
     if (href.length > 1900) { el.querySelector("#b_hint").textContent = "Sehr viele Empfänger — bitte stattdessen die Adressen kopieren und im Mailprogramm ins BCC einfügen (eine lange mailto-Adresse wird von manchen Programmen abgeschnitten)."; }
     window.location.href = href;
   });
+}
+
+// ---------- Excel-/CSV-Import ----------
+let _xlsx = null;
+async function xlsxLib() { if (!_xlsx) { _xlsx = await import("https://esm.sh/xlsx@0.18.5"); } return _xlsx; }
+const IMP = { rows: [], headers: [], map: {}, status: "aktiv", fileName: "" };
+const IMPFIELDS = [
+  { k: "name_full", label: "Name (Vor- & Nachname zusammen)" },
+  { k: "vorname", label: "Vorname" },
+  { k: "nachname", label: "Nachname" },
+  { k: "email", label: "E-Mail" },
+  { k: "tel", label: "Telefon" },
+  { k: "strasse", label: "Straße" },
+  { k: "plz", label: "PLZ" },
+  { k: "ort", label: "Ort" },
+  { k: "geburtsdatum", label: "Geburtsdatum" },
+  { k: "mitglied_seit", label: "Mitglied seit" },
+  { k: "typ", label: "Mitgliedschaft/Art" },
+  { k: "beitrag", label: "Jahresbeitrag" },
+  { k: "zahlart", label: "Zahlart" },
+  { k: "sepa_iban", label: "IBAN" },
+  { k: "sepa_bic", label: "BIC" },
+  { k: "sepa_inhaber", label: "Kontoinhaber" },
+  { k: "notiz", label: "Notiz" },
+];
+const SYN = {
+  name_full: ["name", "mitglied", "fullname"],
+  vorname: ["vorname", "firstname", "vname"],
+  nachname: ["nachname", "familienname", "zuname", "lastname", "name"],
+  email: ["email", "mail", "emailadresse", "mailadresse"],
+  tel: ["telefon", "tel", "handy", "mobil", "mobilnummer", "telefonnummer", "phone"],
+  strasse: ["strasse", "adresse", "anschrift", "str"],
+  plz: ["plz", "postleitzahl", "zip"],
+  ort: ["ort", "stadt", "wohnort"],
+  geburtsdatum: ["geburtsdatum", "geburtstag", "geb", "gebdat", "birthday", "gebdatum"],
+  mitglied_seit: ["mitgliedseit", "eintritt", "beitritt", "eintrittsdatum", "beitrittsdatum", "seit"],
+  typ: ["mitgliedschaft", "mitgliedsart", "typ", "kategorie", "art"],
+  beitrag: ["beitrag", "jahresbeitrag", "mitgliedsbeitrag", "betrag"],
+  zahlart: ["zahlart", "zahlungsart", "zahlungsweise", "zahlweise"],
+  sepa_iban: ["iban", "kontonummer", "konto"],
+  sepa_bic: ["bic", "swift"],
+  sepa_inhaber: ["kontoinhaber", "inhaber"],
+  notiz: ["notiz", "bemerkung", "anmerkung", "kommentar", "info"],
+};
+const normH = (s) => String(s || "").toLowerCase().replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss").replace(/[^a-z0-9]/g, "");
+function autoMap(headers) {
+  const used = new Set(), map = {};
+  // Durchgang 1: exakte Treffer (verhindert, dass "Vorname" als "name" o. Ä. fehlzugeordnet wird)
+  for (const f of IMPFIELDS) {
+    const syn = SYN[f.k] || [f.k];
+    const h = headers.find((hd) => !used.has(hd) && syn.some((s) => normH(hd) === normH(s)));
+    if (h) { map[f.k] = h; used.add(h); }
+  }
+  // Durchgang 2: unscharfe Treffer nur für noch offene Felder
+  for (const f of IMPFIELDS) {
+    if (map[f.k]) continue;
+    const syn = SYN[f.k] || [f.k];
+    const h = headers.find((hd) => !used.has(hd) && syn.some((s) => normH(hd).includes(normH(s))));
+    if (h) { map[f.k] = h; used.add(h); }
+  }
+  // name_full nur nutzen, wenn kein getrenntes Vor-/Nachname gefunden wurde
+  if (map.vorname && map.nachname) delete map.name_full;
+  return map;
+}
+const impStr = (v) => (v == null ? "" : (typeof v === "string" ? v.trim() : String(v).trim()));
+function impNum(v) {
+  if (v == null || v === "") return 0;
+  if (typeof v === "number") return v;
+  const s = String(v).replace(/[^\d,.\-]/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+  const n = parseFloat(s); return isNaN(n) ? 0 : n;
+}
+function impISO(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`;
+  if (typeof v === "number") { const d = new Date(Math.round((v - 25569) * 86400000)); return isNaN(d) ? null : d.toISOString().slice(0, 10); }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+  m = s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{2,4})/); if (m) { let y = +m[3]; if (y < 100) y += 2000; return `${y}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
+  return null;
+}
+function impZahlart(v, iban) {
+  const n = normH(v);
+  if (/sepa|lastschrift|einzug|abbuchung/.test(n)) return "sepa";
+  if (/uberweisung|bank|transfer|dauerauftrag/.test(n)) return "ueberweisung";
+  if (/bar|cash/.test(n)) return "bar";
+  return iban ? "sepa" : "ueberweisung";
+}
+function impGet(row, key) { const h = IMP.map[key]; return h != null ? row[h] : undefined; }
+function impBuildRec(row) {
+  let vn = impStr(impGet(row, "vorname")), nn = impStr(impGet(row, "nachname"));
+  if (IMP.map.name_full && !vn && !nn) {
+    const full = impStr(impGet(row, "name_full"));
+    if (full.includes(",")) { const p = full.split(","); nn = p[0].trim(); vn = (p[1] || "").trim(); }
+    else { const p = full.split(/\s+/); nn = p.length > 1 ? p.pop() : full; vn = p.join(" "); }
+  }
+  const iban = impStr(impGet(row, "sepa_iban")).replace(/\s/g, "");
+  const rec = {
+    company_id: M.company.id, vorname: vn || null, nachname: nn || null,
+    email: impStr(impGet(row, "email")) || null, tel: impStr(impGet(row, "tel")) || null,
+    strasse: impStr(impGet(row, "strasse")) || null, plz: impStr(impGet(row, "plz")) || null, ort: impStr(impGet(row, "ort")) || null,
+    geburtsdatum: impISO(impGet(row, "geburtsdatum")), typ: impStr(impGet(row, "typ")) || null,
+    beitrag: impNum(impGet(row, "beitrag")), zahlart: impZahlart(impGet(row, "zahlart"), iban),
+    sepa_iban: iban || null, sepa_bic: impStr(impGet(row, "sepa_bic")) || null, sepa_inhaber: impStr(impGet(row, "sepa_inhaber")) || null,
+    notiz: impStr(impGet(row, "notiz")) || null, status: IMP.status, quelle: "manuell", created_by: M.userId,
+  };
+  const seit = impISO(impGet(row, "mitglied_seit")); if (seit) rec.mitglied_seit = seit;
+  return rec;
+}
+
+function startImport() {
+  IMP.rows = []; IMP.headers = []; IMP.map = {}; IMP.fileName = "";
+  const body = M.body;
+  body.innerHTML = `
+    <div class="row-between" style="margin-bottom:14px">
+      <h2 class="page-title" style="margin:0">Mitglieder aus Excel importieren</h2>
+      <button class="lnk" id="impBack">← Zur Mitgliederliste</button>
+    </div>
+    <div class="card dropzone" id="impDz">
+      <div class="dz-inner">
+        <div class="dz-ic">⬆︎</div>
+        <div><b>Excel- oder CSV-Datei hier ablegen</b> oder <label class="lnk" for="impFile">Datei wählen</label></div>
+        <div class="note" style="margin-top:4px">.xlsx, .xls oder .csv. Die erste Zeile sollte die Spaltenüberschriften enthalten. Du ordnest die Spalten danach zu und siehst eine Vorschau, bevor gespeichert wird.</div>
+        <input id="impFile" type="file" accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv" hidden>
+      </div>
+    </div>
+    <div id="impResult"></div>`;
+  body.querySelector("#impBack").addEventListener("click", renderMain);
+  const dz = body.querySelector("#impDz"), input = body.querySelector("#impFile");
+  input.addEventListener("change", () => input.files[0] && impHandleFile(input.files[0]));
+  ["dragover", "dragenter"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("over"); }));
+  dz.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) impHandleFile(f); });
+}
+
+async function impHandleFile(file) {
+  const res = M.body.querySelector("#impResult");
+  res.innerHTML = `<div class="card"><div class="empty">„${esc(file.name)}" wird gelesen …</div></div>`;
+  try {
+    const X = await xlsxLib();
+    const wb = X.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = X.utils.sheet_to_json(ws, { defval: "", raw: true });
+    if (!rows.length) { res.innerHTML = `<div class="card"><div class="msg info">Die Tabelle enthält keine Datenzeilen.</div></div>`; return; }
+    const headers = [];
+    rows.slice(0, 20).forEach((r) => Object.keys(r).forEach((k) => { if (!headers.includes(k)) headers.push(k); }));
+    IMP.rows = rows; IMP.headers = headers; IMP.map = autoMap(headers); IMP.fileName = file.name;
+    impRenderMapping();
+  } catch (e) {
+    res.innerHTML = `<div class="card"><div class="msg err">Datei konnte nicht gelesen werden: ${esc(e.message || e)}</div></div>`;
+  }
+}
+
+function impRenderMapping() {
+  const res = M.body.querySelector("#impResult");
+  const opt = (sel) => `<option value="">— nicht importieren —</option>` + IMP.headers.map((h) => `<option value="${esc(h)}" ${h === sel ? "selected" : ""}>${esc(h)}</option>`).join("");
+  res.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="row-between" style="margin-bottom:10px">
+        <h3 class="card-title">${IMP.rows.length} Zeilen aus „${esc(IMP.fileName)}"</h3>
+        <label class="inline">Status aller Importierten
+          <select id="impStatus"><option value="aktiv" selected>Aktiv</option><option value="offen">Neu / offen</option><option value="inaktiv">Inaktiv</option></select>
+        </label>
+      </div>
+      <p class="note" style="margin:0 0 10px">Ordne die Spalten deiner Datei den Feldern zu (automatisch vorausgefüllt). <b>Vor- und Nachname</b> (oder „Name zusammen") sollten belegt sein.</p>
+      <div class="form-grid">
+        ${IMPFIELDS.map((f) => `<label>${esc(f.label)}<select data-map="${f.k}">${opt(IMP.map[f.k])}</select></label>`).join("")}
+      </div>
+    </div>
+    <div id="impPreview"></div>`;
+  res.querySelector("#impStatus").addEventListener("change", (e) => { IMP.status = e.target.value; });
+  res.querySelectorAll("[data-map]").forEach((el) => el.addEventListener("change", () => {
+    const k = el.dataset.map; if (el.value) IMP.map[k] = el.value; else delete IMP.map[k]; impRenderPreview();
+  }));
+  impRenderPreview();
+}
+
+function impRenderPreview() {
+  const box = M.body.querySelector("#impPreview");
+  const recs = IMP.rows.map(impBuildRec);
+  const valid = recs.filter((r) => r.vorname || r.nachname);
+  const show = valid.slice(0, 6);
+  box.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="row-between" style="margin-bottom:10px">
+        <h3 class="card-title">Vorschau</h3>
+        <span class="muted">${valid.length} von ${IMP.rows.length} Zeilen haben einen Namen und werden importiert</span>
+      </div>
+      <div class="tbl-scroll"><table class="tbl">
+        <thead><tr><th>Name</th><th>E-Mail</th><th>Ort</th><th>Geb.</th><th>Mitgliedschaft</th><th class="num">Beitrag</th><th>Zahlart</th><th>IBAN</th></tr></thead>
+        <tbody>${show.map((r) => `<tr>
+          <td><b>${esc([r.nachname, r.vorname].filter(Boolean).join(", "))}</b></td>
+          <td>${esc(r.email || "")}</td><td>${esc(r.ort || "")}</td><td>${r.geburtsdatum ? fmtDate(r.geburtsdatum) : ""}</td>
+          <td>${esc(r.typ || "")}</td><td class="num">${r.beitrag ? fmtEUR(r.beitrag) : ""}</td>
+          <td>${ZA[r.zahlart] || ""}</td><td>${esc(r.sepa_iban || "")}</td></tr>`).join("")}</tbody>
+      </table></div>
+      ${valid.length > show.length ? `<p class="note">… und ${valid.length - show.length} weitere.</p>` : ""}
+      <div class="row-between" style="margin-top:14px">
+        <button class="btn" id="impCancel">Abbrechen</button>
+        <button class="btn primary" id="impSave" ${valid.length ? "" : "disabled"}>${valid.length} Mitglieder importieren</button>
+      </div>
+      <div id="imp_err" class="msg err" hidden style="margin-top:10px"></div>
+    </div>`;
+  box.querySelector("#impCancel").addEventListener("click", renderMain);
+  box.querySelector("#impSave").addEventListener("click", impDoImport);
+}
+
+async function impDoImport(e) {
+  const btn = e.target;
+  const recs = IMP.rows.map(impBuildRec).filter((r) => r.vorname || r.nachname);
+  if (!recs.length) return;
+  btn.disabled = true;
+  let ok = 0; const errs = [];
+  for (let i = 0; i < recs.length; i += 200) {
+    btn.textContent = `Importiert … (${ok}/${recs.length})`;
+    const chunk = recs.slice(i, i + 200);
+    const { error } = await sb.from("members").insert(chunk);
+    if (error) errs.push(error.message); else ok += chunk.length;
+  }
+  if (errs.length) {
+    const err = M.body.querySelector("#imp_err");
+    if (err) { err.textContent = `${ok} importiert, aber Fehler bei den übrigen: ${errs[0]}`; err.hidden = false; }
+    btn.disabled = false; btn.textContent = "Erneut versuchen";
+    await loadData();
+    return;
+  }
+  await loadData();
+  renderMain();
+  const b = M.body;
+  const note = document.createElement("div");
+  note.className = "msg ok"; note.style.margin = "0 0 14px";
+  note.textContent = `${ok} Mitglieder erfolgreich importiert.`;
+  b.insertBefore(note, b.querySelector(".stat-row"));
+  setTimeout(() => note.remove(), 6000);
 }
