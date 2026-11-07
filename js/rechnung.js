@@ -7,12 +7,20 @@ import { loadKatalog, customers, products, upsertCustomerFromInvoice, upsertProd
 
 const R = { company: null, year: null, refresh: null, view: "list", invoices: [], draft: null, userId: null, err: null };
 
-// ---------- QR (lazy) ----------
-let _qr = null;
-async function qrSvg(payload) {
-  if (!_qr) { const m = await import("https://esm.sh/qrcode@1.5.3"); _qr = m.default || m; }
-  return _qr.toString(payload, { type: "svg", errorCorrectionLevel: "M", margin: 0 });
+// ---------- PDF-Bibliotheken (lazy) ----------
+let _qr = null, _jspdf = null;
+async function qrLib() { if (!_qr) { const m = await import("https://esm.sh/qrcode@1.5.3"); _qr = m.default || m; } return _qr; }
+async function jsPDFLib() { if (!_jspdf) { const m = await import("https://esm.sh/jspdf@2.5.1"); _jspdf = m.jsPDF || (m.default && m.default.jsPDF) || m.default; } return _jspdf; }
+function hexRgb(hex) { hex = String(hex || "#184437").replace("#", ""); if (hex.length === 3) hex = hex.split("").map((c) => c + c).join(""); return [parseInt(hex.slice(0, 2), 16) || 0, parseInt(hex.slice(2, 4), 16) || 0, parseInt(hex.slice(4, 6), 16) || 0]; }
+// Betrag fürs PDF: 1.234,56 (eigene Formatierung, da Standard-Helvetica kein €-Glyph hat
+// und toLocaleString je nach Umgebung schmale Leerzeichen als Tausendertrenner liefert)
+function fmtDe(n) {
+  const neg = (Number(n) || 0) < 0;
+  const s = Math.abs(Math.round((Number(n) || 0) * 100) / 100).toFixed(2).split(".");
+  s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return (neg ? "-" : "") + s[0] + "," + s[1];
 }
+const eur = (n) => fmtDe(n) + " EUR";
 
 // ---------- Helfer ----------
 function defaultSteuer(c) {
@@ -100,7 +108,7 @@ function renderList() {
           </td></tr>`).join("")}</tbody>
       </table>` : `<div class="empty">${R.invoices.length ? "Keine Treffer für diesen Filter." : `Noch keine Rechnungen in ${fyLabel(R.year, fyStartMonth(R.company))}. Lege die erste mit „+ Neue Rechnung" an.`}</div>`;
     body.querySelectorAll("[data-open]").forEach((el) => el.addEventListener("click", () => startEditor(R.invoices.find((x) => x.id === el.dataset.open))));
-    body.querySelectorAll("[data-print]").forEach((el) => el.addEventListener("click", () => printInvoice(R.invoices.find((x) => x.id === el.dataset.print))));
+    body.querySelectorAll("[data-print]").forEach((el) => el.addEventListener("click", () => genInvoicePDF(R.invoices.find((x) => x.id === el.dataset.print), el)));
     body.querySelectorAll("[data-paid]").forEach((el) => el.addEventListener("click", () => markPaid(R.invoices.find((x) => x.id === el.dataset.paid))));
     body.querySelectorAll("[data-del]").forEach((el) => el.addEventListener("click", () => delInvoice(el.dataset.del)));
   };
@@ -285,7 +293,7 @@ async function saveInvoice(thenPrint) {
   R.view = "list"; R.editId = null;
   await loadInvoices();
   renderList();
-  if (thenPrint && saved) printInvoice(saved);
+  if (thenPrint && saved) genInvoicePDF(saved);
 }
 async function bumpNumbering(c, nummer) {
   const m = String(nummer).match(/(\d+)\s*$/);
@@ -332,98 +340,149 @@ function markPaid(inv) {
   });
 }
 
-// ---------- Druck / PDF ----------
-async function printInvoice(inv) {
-  const c = R.company;
-  let qr = "";
-  if (c.iban && +inv.brutto > 0) { try { qr = await qrSvg(epcPayload(c, inv.brutto, "Rechnung " + inv.nummer)); } catch (e) { qr = ""; } }
-  const holder = document.createElement("div");
-  holder.id = "print-doc";
-  holder.innerHTML = buildPrintDoc(c, inv, qr);
-  document.body.appendChild(holder);
-  const cleanup = () => { holder.remove(); window.removeEventListener("afterprint", cleanup); };
-  window.addEventListener("afterprint", cleanup);
-  setTimeout(() => window.print(), 60);
+// ---------- PDF erzeugen & herunterladen ----------
+async function genInvoicePDF(inv, btn) {
+  if (!inv) return;
+  const txt = btn && btn.textContent;
+  if (btn) { btn.disabled = true; btn.textContent = "PDF …"; }
+  try {
+    const c = R.company;
+    const JsPDF = await jsPDFLib();
+    let qrUrl = null;
+    if (c.iban && +inv.brutto > 0) {
+      try {
+        const Q = await Promise.race([qrLib(), new Promise((_, r) => setTimeout(() => r(new Error("qr")), 2500))]);
+        qrUrl = await Q.toDataURL(epcPayload(c, inv.brutto, "Rechnung " + (inv.nummer || "")), { margin: 0, width: 240, errorCorrectionLevel: "M" });
+      } catch (e) { qrUrl = null; }
+    }
+    const doc = buildInvoicePdfDoc(JsPDF, c, inv, qrUrl);
+    doc.save(`Rechnung-${String(inv.nummer || "Rechnung").replace(/[^\w\-]+/g, "_")}.pdf`);
+  } catch (e) {
+    alert("PDF konnte nicht erzeugt werden: " + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = txt; }
+  }
 }
-function buildPrintDoc(c, inv, qrSvgStr) {
-  const accent = (c.design && c.design.accent) || "#184437";
-  const logo = c.design && c.design.logo;
-  const addr = [c.strasse, [c.plz, c.ort].filter(Boolean).join(" "), c.land].filter(Boolean);
-  const contact = [c.email, c.tel].filter(Boolean).join(" · ");
-  const legal = [c.uid ? "UID: " + c.uid : "", c.reg ? c.reg : ""].filter(Boolean).join(" · ");
+
+function buildInvoicePdfDoc(JsPDF, c, inv, qrDataUrl) {
+  const doc = new JsPDF({ unit: "mm", format: "a4" });
+  const [ar, ag, ab] = hexRgb(c.design && c.design.accent);
+  const L = 16, R = 194, W = R - L, PH = 297;
+  let y = 18;
+
+  // Absender
+  doc.setFont("helvetica", "bold").setFontSize(15).setTextColor(ar, ag, ab);
+  doc.text(String(c.name || ""), L, y);
+  doc.setFont("helvetica", "normal").setFontSize(8.5).setTextColor(105);
+  let yi = y + 5.5;
+  [String(c.strasse || ""), [c.plz, c.ort].filter(Boolean).join(" "), [c.email, c.tel].filter(Boolean).join("   ·   "), [c.uid ? "UID: " + c.uid : null, c.reg || null].filter(Boolean).join("   ·   ")]
+    .filter((l) => l && l.trim()).forEach((l) => { doc.text(l, L, yi); yi += 4; });
+
+  // Titel + Metadaten rechts
+  doc.setFont("helvetica", "bold").setFontSize(21).setTextColor(ar, ag, ab);
+  doc.text("RECHNUNG", R, y, { align: "right" });
+  doc.setFontSize(9.5).setTextColor(55);
+  let yr = y + 7;
+  doc.text("Nr. " + String(inv.nummer || ""), R, yr, { align: "right" }); yr += 4.6;
+  doc.setFont("helvetica", "normal");
+  doc.text("Datum: " + fmtDate(inv.datum), R, yr, { align: "right" }); yr += 4.6;
+  if (inv.faelligkeit) { doc.text("Fällig: " + fmtDate(inv.faelligkeit), R, yr, { align: "right" }); yr += 4.6; }
+
+  y = Math.max(yi, yr) + 1;
+  doc.setDrawColor(ar, ag, ab).setLineWidth(0.6).line(L, y, R, y);
+  y += 8;
+
+  // Empfänger
+  doc.setFont("helvetica", "normal").setFontSize(7).setTextColor(150);
+  doc.text("RECHNUNG AN", L, y); y += 4.6;
+  doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(30);
+  doc.text(String(inv.kunde || ""), L, y);
+  doc.setFont("helvetica", "normal").setFontSize(9.5).setTextColor(65);
+  if (inv.kunde_adresse) doc.splitTextToSize(String(inv.kunde_adresse), 95).forEach((l) => { y += 4.4; doc.text(l, L, y); });
+  if (inv.kunde_uid) { y += 4.4; doc.setFontSize(8.5).setTextColor(105); doc.text("UID: " + inv.kunde_uid, L, y); }
+
+  // Betreff + Leistungszeitraum
+  if (inv.betreff) { y += 8.5; doc.setFont("helvetica", "bold").setFontSize(11).setTextColor(30); doc.splitTextToSize(String(inv.betreff), W).forEach((l) => { doc.text(l, L, y); y += 5; }); }
+  if (inv.leistung_von || inv.leistung_bis) {
+    y += inv.betreff ? 0 : 8.5;
+    doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(105);
+    doc.text("Leistungszeitraum: " + (inv.leistung_von ? fmtDate(inv.leistung_von) : "") + (inv.leistung_bis ? " – " + fmtDate(inv.leistung_bis) : ""), L, y); y += 2;
+  }
+
+  // Positionstabelle
+  y += 7;
+  const cBez = L + 10, cMenge = L + 120, cEinh = L + 123, cPreis = L + 156, cBetrag = R - 1;
+  doc.setFillColor(ar, ag, ab).rect(L, y - 4.2, W, 6.2, "F");
+  doc.setFont("helvetica", "bold").setFontSize(7.6).setTextColor(255);
+  doc.text("POS", L + 1.5, y); doc.text("BEZEICHNUNG", cBez, y);
+  doc.text("MENGE", cMenge, y, { align: "right" }); doc.text("EINH.", cEinh, y);
+  doc.text("EINZELPR.", cPreis, y, { align: "right" }); doc.text("BETRAG EUR", cBetrag, y, { align: "right" });
+  y += 3;
+  doc.setFont("helvetica", "normal").setFontSize(9.5).setTextColor(40);
+  (inv.positionen || []).forEach((p, i) => {
+    const bez = doc.splitTextToSize(String(p.bezeichnung || ""), 100);
+    y += 4.5;
+    doc.text(String(i + 1), L + 1.5, y);
+    bez.forEach((l, li) => doc.text(l, cBez, y + li * 4.3));
+    doc.text(String(p.menge == null ? "" : p.menge), cMenge, y, { align: "right" });
+    doc.text(String(p.einheit || ""), cEinh, y);
+    doc.text(fmtDe(p.einzelpreis), cPreis, y, { align: "right" });
+    doc.text(fmtDe(p.netto), cBetrag, y, { align: "right" });
+    y += Math.max((bez.length - 1) * 4.3, 0) + 2.5;
+    doc.setDrawColor(226).setLineWidth(0.2).line(L, y, R, y);
+  });
+
+  // Summen (rechts)
   const pos = inv.positionen || [];
-  const rab = inv.rabatt && inv.rabatt.gesamt ? +inv.rabatt.gesamt : 0;
   const zwischen = pos.reduce((s, p) => s + (+p.netto || 0), 0);
+  const rab = inv.rabatt && inv.rabatt.gesamt ? +inv.rabatt.gesamt : 0;
   const rabBetrag = Math.round(zwischen * (rab / 100) * 100) / 100;
-  const period = (inv.leistung_von || inv.leistung_bis) ? `Leistungszeitraum: ${inv.leistung_von ? fmtDate(inv.leistung_von) : ""}${inv.leistung_bis ? " – " + fmtDate(inv.leistung_bis) : ""}` : "";
-  return `
-  <style>
-    @page { size: A4; margin: 16mm; }
-    #print-doc{ font-family: Helvetica, Arial, sans-serif; color:#1a211c; font-size:11pt; line-height:1.45; }
-    #print-doc *{ box-sizing:border-box; }
-    #print-doc .pd-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:20px; border-bottom:3px solid ${accent}; padding-bottom:12px; }
-    #print-doc .pd-iss{ max-width:60%; }
-    #print-doc .pd-logo{ max-height:60px; max-width:230px; margin-bottom:6px; }
-    #print-doc .pd-name{ font-size:15pt; font-weight:700; color:${accent}; }
-    #print-doc .pd-sub{ font-size:9pt; color:#555; }
-    #print-doc .pd-title{ text-align:right; }
-    #print-doc .pd-title h1{ font-size:20pt; margin:0 0 4px; color:${accent}; letter-spacing:.02em; }
-    #print-doc .pd-meta{ font-size:9.5pt; color:#333; }
-    #print-doc .pd-to{ margin:26px 0 6px; }
-    #print-doc .pd-to .lbl{ font-size:8pt; text-transform:uppercase; letter-spacing:.08em; color:#888; }
-    #print-doc .pd-betreff{ font-weight:700; margin:16px 0 4px; }
-    #print-doc table.pd-pos{ width:100%; border-collapse:collapse; margin-top:10px; font-size:10pt; }
-    #print-doc table.pd-pos th{ text-align:left; background:${accent}; color:#fff; padding:6px 8px; font-size:8.5pt; text-transform:uppercase; letter-spacing:.03em; }
-    #print-doc table.pd-pos td{ padding:6px 8px; border-bottom:1px solid #e3e0d6; vertical-align:top; }
-    #print-doc .num{ text-align:right; white-space:nowrap; }
-    #print-doc .pd-sums{ width:300px; margin-left:auto; margin-top:12px; font-size:10.5pt; }
-    #print-doc .pd-sums div{ display:flex; justify-content:space-between; padding:3px 0; }
-    #print-doc .pd-sums .tot{ border-top:2px solid ${accent}; margin-top:4px; padding-top:6px; font-weight:700; font-size:12pt; color:${accent}; }
-    #print-doc .pd-note{ margin-top:18px; font-size:9.5pt; color:#444; }
-    #print-doc .pd-pay{ margin-top:18px; display:flex; justify-content:space-between; gap:20px; border-top:1px solid #e3e0d6; padding-top:12px; align-items:flex-start; }
-    #print-doc .pd-pay .k{ font-size:9.5pt; }
-    #print-doc .pd-qr{ width:110px; height:110px; flex:none; }
-    #print-doc .pd-qr svg{ width:110px; height:110px; }
-    #print-doc .pd-foot{ margin-top:22px; border-top:1px solid #e3e0d6; padding-top:8px; font-size:8pt; color:#888; text-align:center; }
-  </style>
-  <div class="pd-top">
-    <div class="pd-iss">
-      ${logo ? `<img class="pd-logo" src="${esc(logo)}" alt="">` : `<div class="pd-name">${esc(c.name)}</div>`}
-      <div class="pd-sub">${logo ? esc(c.name) + "<br>" : ""}${addr.map(esc).join(" · ")}${contact ? "<br>" + esc(contact) : ""}${legal ? "<br>" + esc(legal) : ""}</div>
-    </div>
-    <div class="pd-title">
-      <h1>RECHNUNG</h1>
-      <div class="pd-meta"><b>Nr. ${esc(inv.nummer)}</b><br>Datum: ${fmtDate(inv.datum)}${inv.faelligkeit ? "<br>Fällig: " + fmtDate(inv.faelligkeit) : ""}</div>
-    </div>
-  </div>
-  <div class="pd-to">
-    <div class="lbl">Rechnung an</div>
-    <div><b>${esc(inv.kunde || "")}</b></div>
-    <div style="white-space:pre-line">${esc(inv.kunde_adresse || "")}</div>
-    ${inv.kunde_uid ? `<div class="pd-sub">UID: ${esc(inv.kunde_uid)}</div>` : ""}
-  </div>
-  ${inv.betreff ? `<div class="pd-betreff">${esc(inv.betreff)}</div>` : ""}
-  ${period ? `<div class="pd-sub">${esc(period)}</div>` : ""}
-  <table class="pd-pos">
-    <thead><tr><th style="width:36px">Pos</th><th>Bezeichnung</th><th class="num">Menge</th><th>Einh.</th><th class="num">Einzelpr.</th><th class="num">Rabatt</th><th class="num">Betrag</th></tr></thead>
-    <tbody>${pos.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.bezeichnung || "")}</td><td class="num">${esc(String(p.menge))}</td><td>${esc(p.einheit || "")}</td>
-      <td class="num">${fmtEUR(p.einzelpreis)}</td><td class="num">${(+p.rabatt ? p.rabatt + " %" : "–")}</td><td class="num">${fmtEUR(p.netto)}</td></tr>`).join("")}</tbody>
-  </table>
-  <div class="pd-sums">
-    <div><span>Zwischensumme</span><span>${fmtEUR(zwischen)}</span></div>
-    ${rab ? `<div><span>Gesamtrabatt ${rab} %</span><span>− ${fmtEUR(rabBetrag)}</span></div>` : ""}
-    <div><span>Nettobetrag</span><span>${fmtEUR(inv.netto)}</span></div>
-    ${+inv.ust ? `<div><span>USt</span><span>${fmtEUR(inv.ust)}</span></div>` : ""}
-    <div class="tot"><span>Gesamtbetrag</span><span>${fmtEUR(inv.brutto)}</span></div>
-  </div>
-  ${inv.steuer_vermerk ? `<div class="pd-note">${esc(inv.steuer_vermerk)}</div>` : ""}
-  <div class="pd-pay">
-    <div class="k">
-      <b>Zahlbar${inv.faelligkeit ? " bis " + fmtDate(inv.faelligkeit) : " nach Erhalt"}</b><br>
-      ${c.iban ? `${esc(c.bank || "")}${c.bank ? "<br>" : ""}IBAN: ${esc(c.iban)}${c.bic ? "<br>BIC: " + esc(c.bic) : ""}` : "Zahlungsdaten auf Anfrage."}
-      ${c.iban ? `<br><span class="pd-sub">Bitte Rechnungsnummer als Verwendungszweck angeben.</span>` : ""}
-    </div>
-    ${qrSvgStr ? `<div class="pd-qr">${qrSvgStr}<div class="pd-sub" style="text-align:center">Scan &amp; Pay</div></div>` : ""}
-  </div>
-  <div class="pd-foot">${esc(c.name)}${addr.length ? " · " + esc(addr.join(", ")) : ""}${c.iban ? " · " + esc(c.iban) : ""}</div>`;
+  const ustRate = +inv.ust && +inv.netto ? Math.round((+inv.ust / +inv.netto) * 100) : 0;
+  const tL = L + 96, tV = R;
+  y += 8;
+  const srow = (label, val) => { doc.setFont("helvetica", "normal").setFontSize(10).setTextColor(70); doc.text(label, tL, y); doc.text(val, tV, y, { align: "right" }); y += 5.4; };
+  srow("Zwischensumme", eur(zwischen));
+  if (rab) srow("Gesamtrabatt " + rab + " %", "- " + eur(rabBetrag));
+  srow("Nettobetrag", eur(inv.netto));
+  if (+inv.ust) srow("USt " + (ustRate || 20) + " %", eur(inv.ust));
+  doc.setDrawColor(ar, ag, ab).setLineWidth(0.5).line(tL, y - 1.5, tV, y - 1.5);
+  y += 2;
+  doc.setFont("helvetica", "bold").setFontSize(12.5).setTextColor(ar, ag, ab);
+  doc.text("Gesamtbetrag", tL, y); doc.text(eur(inv.brutto), tV, y, { align: "right" });
+  y += 8;
+
+  // Steuerhinweis
+  if (inv.steuer_vermerk) {
+    doc.setFont("helvetica", "normal").setFontSize(9).setTextColor(70);
+    doc.splitTextToSize(String(inv.steuer_vermerk), W).forEach((l) => { y += 4.4; doc.text(l, L, y); });
+    y += 2;
+  }
+
+  // Zahlung + QR (unten)
+  let py = Math.max(y + 10, PH - 55);
+  doc.setDrawColor(226).setLineWidth(0.3).line(L, py, R, py); py += 6;
+  doc.setFont("helvetica", "bold").setFontSize(10).setTextColor(40);
+  doc.text("Zahlbar" + (inv.faelligkeit ? " bis " + fmtDate(inv.faelligkeit) : " nach Erhalt"), L, py);
+  doc.setFont("helvetica", "normal").setFontSize(9.5).setTextColor(70);
+  let qy = py + 5;
+  if (c.iban) {
+    if (c.bank) { doc.text(String(c.bank), L, qy); qy += 4.4; }
+    doc.text("IBAN: " + c.iban, L, qy); qy += 4.4;
+    if (c.bic) { doc.text("BIC: " + c.bic, L, qy); qy += 4.4; }
+    doc.setFontSize(8.5).setTextColor(120); doc.text("Bitte Rechnungsnummer als Verwendungszweck angeben.", L, qy);
+  } else { doc.text("Zahlungsdaten auf Anfrage.", L, qy); }
+  if (qrDataUrl) {
+    try {
+      doc.addImage(qrDataUrl, "PNG", R - 26, py - 1, 26, 26);
+      doc.setFontSize(7).setTextColor(120); doc.text("Scan & Pay", R - 13, py + 28, { align: "center" });
+    } catch (e) { /* QR optional */ }
+  }
+
+  // Fußzeile
+  doc.setFontSize(7.5).setTextColor(150);
+  const foot = [c.name, [c.strasse, [c.plz, c.ort].filter(Boolean).join(" ")].filter(Boolean).join(", "), c.iban].filter(Boolean).join("   ·   ");
+  doc.text(foot, 105, PH - 10, { align: "center", maxWidth: W });
+  return doc;
 }
+// zum Testen im Browser:
+export { buildInvoicePdfDoc, jsPDFLib, epcPayload };
