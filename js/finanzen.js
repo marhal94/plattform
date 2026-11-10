@@ -595,7 +595,11 @@ async function applyBudgetParse(e) {
   await sb.from("cost_centers").upsert(ccRecs, { onConflict: "company_id,name", ignoreDuplicates: true });
   // 2) Soll-Werte (Budget) setzen – pro Kostenstelle+Art der letzte Wert gewinnt
   const bgMap = new Map();
-  for (const r of rows) bgMap.set(r.kostenstelle.trim() + "|" + r.typ, { company_id: F.companyId, jahr: F.year, konto: "ALLE", kostenstelle: r.kostenstelle.trim(), typ: r.typ, soll: r.soll });
+  for (const r of rows) {
+    const key = r.kostenstelle.trim() + "|" + r.typ;
+    if (bgMap.has(key)) bgMap.get(key).soll = Math.round((bgMap.get(key).soll + r.soll) * 100) / 100;
+    else bgMap.set(key, { company_id: F.companyId, jahr: F.year, konto: "ALLE", kostenstelle: r.kostenstelle.trim(), typ: r.typ, soll: r.soll });
+  }
   const bgRecs = [...bgMap.values()];
   let { error } = await sb.from("budgets").upsert(bgRecs, { onConflict: "company_id,jahr,konto,kostenstelle,typ" });
   if (error && isKontoMissing(error)) { bgRecs.forEach((b) => delete b.konto); ({ error } = await sb.from("budgets").upsert(bgRecs, { onConflict: "company_id,jahr,kostenstelle,typ" })); }

@@ -112,7 +112,7 @@ const AUSGABE_RE = /\b(ausgab|aufwand|aufwendung|kosten|auszahlung|material|miet
 const SUM_RE = /\b(summe|gesamt|zwischensumme|saldo|überschuss|abgang|total|ergebnis|differenz|bilanz)\b/i;
 
 export function parseBudget(lines) {
-  const out = []; let section = null;
+  const raw = []; let section = null;
   for (const ln of lines) {
     const t = (ln.text || "").trim(); if (!t) continue;
     AMT_RE.lastIndex = 0;
@@ -133,9 +133,16 @@ export function parseBudget(lines) {
     if (EINNAHME_RE.test(t) && !AUSGABE_RE.test(t)) typ = "einnahme";
     else if (AUSGABE_RE.test(t)) typ = "ausgabe";
     if (!typ) typ = "ausgabe";
-    out.push({ kostenstelle: name.slice(0, 60), typ, soll: Math.abs(val) });
+    raw.push({ kostenstelle: name.slice(0, 60), typ, soll: Math.abs(val) });
   }
-  return out;
+  // Mehrere Beträge je Kostenstelle (gleicher Name + Art) zu einer Summe zusammenfassen
+  const map = new Map();
+  for (const r of raw) {
+    const key = r.kostenstelle.trim().toLowerCase() + "|" + r.typ;
+    if (map.has(key)) map.get(key).soll = Math.round((map.get(key).soll + r.soll) * 100) / 100;
+    else map.set(key, { kostenstelle: r.kostenstelle.trim(), typ: r.typ, soll: r.soll });
+  }
+  return [...map.values()];
 }
 
 export async function parseBudgetBuffer(buf) {
