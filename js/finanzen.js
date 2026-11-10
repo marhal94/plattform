@@ -1,7 +1,7 @@
 // Finanzen-Modul: Einnahmen-Ausgaben-Rechnung (EAR), Buchungen,
 // Kontoauszug-PDF-Import, Soll-Ist-Vergleich, Kostenstellen.
 import { sb, esc, fmtEUR, fmtNum, fmtDate, todayISO, uuid, fyStartMonth, fyLabel, fyRange, currentFYStartYear } from "./db.js";
-import { parseFile } from "./pdfimport.js";
+import { parseFile, parseBudgetFile, parseBudgetBuffer } from "./pdfimport.js";
 import { modal, closeModal, showErr } from "./ui.js";
 import { renderRechnungen } from "./rechnung.js";
 import { renderStammdaten } from "./stammdaten.js";
@@ -463,7 +463,8 @@ function renderSollIst(body) {
     <div class="note" style="margin-bottom:2px">Das <b>Budget (Soll)</b> gilt gesamt über Bankkonto und alle Kassen. Der <b>Ist-Wert</b> ist die Summe aller Buchungen (Bankkonto + Kassen) je Kostenstelle.</div>
     ${sollIstSection("einnahme", "Einnahmen — Soll-Ist", true)}
     ${sollIstSection("ausgabe", "Ausgaben — Soll-Ist", true)}
-    <div class="card" style="margin-top:14px" id="budgetDocCard"><div class="empty">Lädt …</div></div>`;
+    <div class="card" style="margin-top:14px" id="budgetDocCard"><div class="empty">Lädt …</div></div>
+    <div id="budgetParseResult"></div>`;
   body.querySelectorAll("[data-soll]").forEach((el) => el.addEventListener("change", () => saveBudget(el.dataset.soll, el.dataset.typ, el.value, el)));
   body.querySelector("#sollPdf").addEventListener("click", () => printSollIst());
   if (F.budgetDocsKey === `${F.companyId}:${F.year}`) renderBudgetDocs();
@@ -493,13 +494,14 @@ function renderBudgetDocs() {
           <td>📄 ${esc(f.name.replace(/^\d+-/, ""))}</td>
           <td class="muted">${f.created_at ? fmtDate(f.created_at.slice(0, 10)) : ""}</td>
           <td class="num muted">${f.metadata && f.metadata.size ? Math.round(f.metadata.size / 1024) + " KB" : ""}</td>
-          <td class="act"><button class="lnk" data-dopen="${esc(f.name)}">Öffnen</button><button class="lnk del" data-ddel="${esc(f.name)}">Löschen</button></td>
+          <td class="act"><button class="lnk" data-dopen="${esc(f.name)}">Öffnen</button><button class="lnk" data-dparse="${esc(f.name)}">Kostenstellen einlesen</button><button class="lnk del" data-ddel="${esc(f.name)}">Löschen</button></td>
         </tr>`).join("")}</tbody></table>`
         : `<div class="empty">Noch keine Budgetplanung für ${fyl()} hochgeladen.</div>`)}
     <div id="budgetUpErr" class="msg err" hidden style="margin-top:8px"></div>`;
   const up = card.querySelector("#budgetUp");
   if (up) up.addEventListener("change", () => up.files[0] && uploadBudgetDoc(up.files[0]));
   card.querySelectorAll("[data-dopen]").forEach((el) => el.addEventListener("click", () => openBudgetDoc(el.dataset.dopen)));
+  card.querySelectorAll("[data-dparse]").forEach((el) => el.addEventListener("click", () => budgetParseFromStored(el.dataset.dparse)));
   card.querySelectorAll("[data-ddel]").forEach((el) => el.addEventListener("click", () => delBudgetDoc(el.dataset.ddel)));
 }
 async function uploadBudgetDoc(file) {
@@ -511,6 +513,96 @@ async function uploadBudgetDoc(file) {
   const r = await sb.storage.from("dokumente").upload(`${budgetDir()}/${Date.now()}-${safe}`, file, { contentType: "application/pdf", upsert: false });
   if (r.error) { fail("Upload fehlgeschlagen: " + r.error.message); return; }
   await loadBudgetDocs(); renderBudgetDocs();
+  // Kostenstellen + Soll-Werte aus dem PDF erkennen
+  budgetParseFromFile(file);
+}
+
+// ---------- Budget aus PDF erkennen -> Soll-Ist übernehmen ----------
+let BUDGETIMP = { rows: [] };
+async function budgetParseFromFile(file) {
+  const res = F.root.querySelector("#budgetParseResult");
+  if (res) res.innerHTML = `<div class="card" style="margin-top:14px"><div class="empty">Budgetplanung wird ausgewertet …</div></div>`;
+  try { const { rows } = await parseBudgetFile(file); showBudgetParse(rows); }
+  catch (e) { if (res) res.innerHTML = `<div class="card" style="margin-top:14px"><div class="msg err">Auswertung fehlgeschlagen: ${esc(e.message || e)}</div></div>`; }
+}
+async function budgetParseFromStored(name) {
+  const res = F.root.querySelector("#budgetParseResult");
+  if (res) res.innerHTML = `<div class="card" style="margin-top:14px"><div class="empty">„${esc(name.replace(/^\d+-/, ""))}" wird ausgewertet …</div></div>`;
+  try {
+    const sig = await sb.storage.from("dokumente").createSignedUrl(`${budgetDir()}/${name}`, 120);
+    if (sig.error || !sig.data) throw new Error(sig.error ? sig.error.message : "kein Link");
+    const buf = await (await fetch(sig.data.signedUrl)).arrayBuffer();
+    const { rows } = await parseBudgetBuffer(buf);
+    showBudgetParse(rows);
+  } catch (e) { if (res) res.innerHTML = `<div class="card" style="margin-top:14px"><div class="msg err">Auswertung fehlgeschlagen: ${esc(e.message || e)}</div></div>`; }
+}
+function showBudgetParse(rows) {
+  BUDGETIMP = { rows: rows.map((r, i) => ({ ...r, _id: i, include: true })) };
+  renderBudgetParse();
+}
+function renderBudgetParse() {
+  const res = F.root.querySelector("#budgetParseResult");
+  if (!res) return;
+  const rows = BUDGETIMP.rows;
+  if (!rows.length) {
+    res.innerHTML = `<div class="card" style="margin-top:14px"><div class="msg info">Aus dem PDF konnten keine Kostenstellen mit Beträgen erkannt werden. Du kannst die Soll-Werte oben manuell eintragen.</div></div>`;
+    return;
+  }
+  const ccNames = [...new Set([...F.costCenters.map((c) => c.name), ...F.bookings.map((b) => (b.kostenstelle || "").trim()).filter(Boolean)])].sort();
+  const ccOpts = (sel) => ccNames.map((n) => `<option value="${esc(n)}" ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
+  res.innerHTML = `
+    <div class="card" style="margin-top:14px">
+      <div class="row-between" style="margin-bottom:10px">
+        <h3 class="card-title">${rows.length} Kostenstellen aus der Budgetplanung erkannt</h3>
+        <span class="muted">prüfen, dann übernehmen</span>
+      </div>
+      <p class="note" style="margin:0 0 10px">Neue Kostenstellen werden angelegt, der Soll-Wert wird für <b>${fyl()}</b> gesetzt. Namen/Art/Betrag kannst du vorher korrigieren; per Liste wählst du einen bestehenden Namen.</p>
+      <div class="tbl-scroll"><table class="tbl import">
+        <thead><tr><th><input type="checkbox" id="bpAll" checked></th><th>Kostenstelle</th><th>bestehende wählen</th><th>Art</th><th class="num">Soll (€)</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr class="${r.include ? "" : "off"}">
+          <td><input type="checkbox" data-bpinc="${r._id}" ${r.include ? "checked" : ""}></td>
+          <td><input data-bpf="kostenstelle" data-row="${r._id}" value="${esc(r.kostenstelle)}"></td>
+          <td><select data-bpf="pick" data-row="${r._id}"><option value="">— neu —</option>${ccOpts("")}</select></td>
+          <td><select data-bpf="typ" data-row="${r._id}"><option value="ausgabe" ${r.typ === "ausgabe" ? "selected" : ""}>Ausgabe</option><option value="einnahme" ${r.typ === "einnahme" ? "selected" : ""}>Einnahme</option></select></td>
+          <td><input class="num" type="number" step="0.01" data-bpf="soll" data-row="${r._id}" value="${r.soll}"></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      <div class="row-between" style="margin-top:14px">
+        <button class="btn" id="bpCancel">Verwerfen</button>
+        <button class="btn primary" id="bpApply">Ins Budget übernehmen</button>
+      </div>
+      <div id="bpErr" class="msg err" hidden style="margin-top:10px"></div>
+    </div>`;
+  const get = (id) => BUDGETIMP.rows.find((r) => r._id == id);
+  res.querySelector("#bpAll").addEventListener("change", (e) => { BUDGETIMP.rows.forEach((r) => (r.include = e.target.checked)); renderBudgetParse(); });
+  res.querySelectorAll("[data-bpinc]").forEach((el) => el.addEventListener("change", () => { get(el.dataset.bpinc).include = el.checked; renderBudgetParse(); }));
+  res.querySelectorAll("[data-bpf]").forEach((el) => el.addEventListener("change", () => {
+    const r = get(el.dataset.row), f = el.dataset.bpf;
+    if (f === "pick") { if (el.value) { r.kostenstelle = el.value; renderBudgetParse(); } }
+    else r[f] = f === "soll" ? Math.abs(parseFloat(el.value) || 0) : el.value;
+  }));
+  res.querySelector("#bpCancel").addEventListener("click", () => { BUDGETIMP = { rows: [] }; res.innerHTML = ""; });
+  res.querySelector("#bpApply").addEventListener("click", applyBudgetParse);
+}
+async function applyBudgetParse(e) {
+  const btn = e.target;
+  const rows = BUDGETIMP.rows.filter((r) => r.include && (r.kostenstelle || "").trim() && r.soll > 0);
+  if (!rows.length) { const er = F.root.querySelector("#bpErr"); if (er) { er.textContent = "Keine gültigen Zeilen (Name + Soll > 0)."; er.hidden = false; } return; }
+  btn.disabled = true; btn.textContent = "Übernimmt …";
+  // 1) fehlende Kostenstellen anlegen
+  const names = [...new Set(rows.map((r) => r.kostenstelle.trim()))];
+  const ccRecs = names.map((name) => ({ company_id: F.companyId, name }));
+  await sb.from("cost_centers").upsert(ccRecs, { onConflict: "company_id,name", ignoreDuplicates: true });
+  // 2) Soll-Werte (Budget) setzen – pro Kostenstelle+Art der letzte Wert gewinnt
+  const bgMap = new Map();
+  for (const r of rows) bgMap.set(r.kostenstelle.trim() + "|" + r.typ, { company_id: F.companyId, jahr: F.year, konto: "ALLE", kostenstelle: r.kostenstelle.trim(), typ: r.typ, soll: r.soll });
+  const bgRecs = [...bgMap.values()];
+  let { error } = await sb.from("budgets").upsert(bgRecs, { onConflict: "company_id,jahr,konto,kostenstelle,typ" });
+  if (error && isKontoMissing(error)) { bgRecs.forEach((b) => delete b.konto); ({ error } = await sb.from("budgets").upsert(bgRecs, { onConflict: "company_id,jahr,kostenstelle,typ" })); }
+  if (error) { const er = F.root.querySelector("#bpErr"); if (er) { er.textContent = "Übernahme fehlgeschlagen: " + error.message; er.hidden = false; } btn.disabled = false; btn.textContent = "Ins Budget übernehmen"; return; }
+  BUDGETIMP = { rows: [] };
+  await loadData();
+  renderSollIst(F.root.querySelector("#finBody"));
 }
 async function openBudgetDoc(name) {
   const w = window.open("", "_blank");

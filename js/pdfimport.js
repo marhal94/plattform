@@ -105,3 +105,43 @@ export async function parseFile(file) {
   const lines = await extractLines(buf);
   return { lines, rows: parseStatement(lines) };
 }
+
+// ---------- Budgetplanung: Kostenstellen + Soll-Werte erkennen ----------
+const EINNAHME_RE = /\b(einnahm|erl[öo]s|ertrag|einzahlung|einkünft|zuschuss|f[öo]rder|subvention|sponsor|beitrag|umsatz)/i;
+const AUSGABE_RE = /\b(ausgab|aufwand|aufwendung|kosten|auszahlung|material|miete|personal)/i;
+const SUM_RE = /\b(summe|gesamt|zwischensumme|saldo|überschuss|abgang|total|ergebnis|differenz|bilanz)\b/i;
+
+export function parseBudget(lines) {
+  const out = []; let section = null;
+  for (const ln of lines) {
+    const t = (ln.text || "").trim(); if (!t) continue;
+    AMT_RE.lastIndex = 0;
+    const amts = t.match(AMT_RE);
+    if (!amts || !amts.length) {
+      // Abschnittsüberschrift ohne Betrag
+      if (EINNAHME_RE.test(t) && !AUSGABE_RE.test(t)) section = "einnahme";
+      else if (AUSGABE_RE.test(t)) section = "ausgabe";
+      continue;
+    }
+    if (SUM_RE.test(t)) continue;
+    const val = parseEuro(amts[amts.length - 1]); // letzter Betrag = Budgetwert
+    if (val == null || Math.abs(val) < 0.01) continue;
+    AMT_RE.lastIndex = 0;
+    let name = t.replace(AMT_RE, " ").replace(/[.…]{2,}/g, " ").replace(/\s+/g, " ").trim().replace(/[\s:·–—-]+$/g, "").trim();
+    if (name.length < 2 || /^\d+$/.test(name)) continue;
+    let typ = section;
+    if (EINNAHME_RE.test(t) && !AUSGABE_RE.test(t)) typ = "einnahme";
+    else if (AUSGABE_RE.test(t)) typ = "ausgabe";
+    if (!typ) typ = "ausgabe";
+    out.push({ kostenstelle: name.slice(0, 60), typ, soll: Math.abs(val) });
+  }
+  return out;
+}
+
+export async function parseBudgetBuffer(buf) {
+  const lines = await extractLines(buf);
+  return { lines, rows: parseBudget(lines) };
+}
+export async function parseBudgetFile(file) {
+  return parseBudgetBuffer(await file.arrayBuffer());
+}
