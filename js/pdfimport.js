@@ -111,20 +111,72 @@ const EINNAHME_RE = /\b(einnahm|erl[öo]s|ertrag|einzahlung|einkünft|zuschuss|f
 const AUSGABE_RE = /\b(ausgab|aufwand|aufwendung|kosten|auszahlung|material|miete|personal)/i;
 const SUM_RE = /\b(summe|gesamt|zwischensumme|saldo|überschuss|abgang|total|ergebnis|differenz|bilanz)\b/i;
 
+const AMT1 = /\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2}/;
+
+// Mehrere Beträge je Kostenstelle (gleicher Name + Art) zu einer Summe zusammenfassen
+function aggregateBudget(raw) {
+  const map = new Map();
+  for (const r of raw) {
+    if (!(r.soll > 0)) continue;
+    const key = r.kostenstelle.trim().toLowerCase() + "|" + r.typ;
+    if (map.has(key)) map.get(key).soll = Math.round((map.get(key).soll + r.soll) * 100) / 100;
+    else map.set(key, { kostenstelle: r.kostenstelle.trim(), typ: r.typ, soll: r.soll });
+  }
+  return [...map.values()];
+}
+
+// Format mit Spaltenkopf „… Einnahmen Ausgaben": nur GROSS geschriebene Haupt-
+// Kostenstellen (ohne Kleinbuchstaben, max. 2 Spaltenwerte) übernehmen, Details raus.
+function parseBudgetTwoCol(lines) {
+  let xEin = null, xAus = null;
+  for (const ln of lines) {
+    if (/einnahmen/i.test(ln.text) && /ausgaben/i.test(ln.text)) {
+      for (const it of ln.items || []) { if (/einnahmen/i.test(it.str)) xEin = it.x; if (/ausgaben/i.test(it.str)) xAus = it.x; }
+      if (xEin != null && xAus != null) break;
+    }
+  }
+  if (xEin == null || xAus == null) return null;
+  const raw = [];
+  for (const ln of lines) {
+    const t = (ln.text || "").trim(); if (!t || SUM_RE.test(t)) continue;
+    const fi = t.search(AMT1); if (fi < 0) continue;
+    const name = t.slice(0, fi).replace(/^[\d\/\s]+/, "").replace(/[-€\s.]+$/, "").trim();
+    if (name.replace(/[^A-Za-zÄÖÜäöüß]/g, "").length < 3) continue;
+    if (/[a-zäöüß]/.test(t)) continue;                 // Detailzeilen enthalten Kleinbuchstaben
+    if (name !== name.toUpperCase()) continue;
+    AMT_RE.lastIndex = 0;
+    const amts = t.match(AMT_RE) || [];
+    if (!amts.length || amts.length > 2) continue;
+    if (amts.length === 2) {
+      raw.push({ kostenstelle: name, typ: "einnahme", soll: Math.abs(parseEuro(amts[0]) || 0) });
+      raw.push({ kostenstelle: name, typ: "ausgabe", soll: Math.abs(parseEuro(amts[1]) || 0) });
+    } else {
+      const ai = (ln.items || []).filter((it) => AMT1.test(it.str)).pop();
+      const x = ai ? ai.x : null;
+      const typ = x != null ? (Math.abs(x - xEin) <= Math.abs(x - xAus) ? "einnahme" : "ausgabe") : (EINNAHME_RE.test(t) ? "einnahme" : "ausgabe");
+      raw.push({ kostenstelle: name, typ, soll: Math.abs(parseEuro(amts[0]) || 0) });
+    }
+  }
+  const rows = aggregateBudget(raw);
+  return rows.length ? rows : null;
+}
+
 export function parseBudget(lines) {
+  const two = parseBudgetTwoCol(lines);
+  if (two) return two;
+  // Fallback: generisch, Abschnitte Einnahmen/Ausgaben
   const raw = []; let section = null;
   for (const ln of lines) {
     const t = (ln.text || "").trim(); if (!t) continue;
     AMT_RE.lastIndex = 0;
     const amts = t.match(AMT_RE);
     if (!amts || !amts.length) {
-      // Abschnittsüberschrift ohne Betrag
       if (EINNAHME_RE.test(t) && !AUSGABE_RE.test(t)) section = "einnahme";
       else if (AUSGABE_RE.test(t)) section = "ausgabe";
       continue;
     }
     if (SUM_RE.test(t)) continue;
-    const val = parseEuro(amts[amts.length - 1]); // letzter Betrag = Budgetwert
+    const val = parseEuro(amts[amts.length - 1]);
     if (val == null || Math.abs(val) < 0.01) continue;
     AMT_RE.lastIndex = 0;
     let name = t.replace(AMT_RE, " ").replace(/[.…]{2,}/g, " ").replace(/\s+/g, " ").trim().replace(/[\s:·–—-]+$/g, "").trim();
@@ -135,14 +187,7 @@ export function parseBudget(lines) {
     if (!typ) typ = "ausgabe";
     raw.push({ kostenstelle: name.slice(0, 60), typ, soll: Math.abs(val) });
   }
-  // Mehrere Beträge je Kostenstelle (gleicher Name + Art) zu einer Summe zusammenfassen
-  const map = new Map();
-  for (const r of raw) {
-    const key = r.kostenstelle.trim().toLowerCase() + "|" + r.typ;
-    if (map.has(key)) map.get(key).soll = Math.round((map.get(key).soll + r.soll) * 100) / 100;
-    else map.set(key, { kostenstelle: r.kostenstelle.trim(), typ: r.typ, soll: r.soll });
-  }
-  return [...map.values()];
+  return aggregateBudget(raw);
 }
 
 export async function parseBudgetBuffer(buf) {
