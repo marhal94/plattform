@@ -14,6 +14,7 @@ const F = {
   bookings: [], costCenters: [], budgets: [], konten: [],
   konto: "", // "" = alle Konten/Kassen; sonst Name (z. B. "Handkassa")
   showSoll: false, // Soll-Ist-Vergleich in der Übersicht einblenden
+  budgetDocs: [], budgetDocsKey: null, budgetDocsErr: null, // hochgeladene Budgetplanungs-PDFs
   userId: null, root: null, err: null,
 };
 const DEFAULT_KONTO = "Bankkonto";
@@ -461,9 +462,67 @@ function renderSollIst(body) {
     </div>
     <div class="note" style="margin-bottom:2px">Das <b>Budget (Soll)</b> gilt gesamt über Bankkonto und alle Kassen. Der <b>Ist-Wert</b> ist die Summe aller Buchungen (Bankkonto + Kassen) je Kostenstelle.</div>
     ${sollIstSection("einnahme", "Einnahmen — Soll-Ist", true)}
-    ${sollIstSection("ausgabe", "Ausgaben — Soll-Ist", true)}`;
+    ${sollIstSection("ausgabe", "Ausgaben — Soll-Ist", true)}
+    <div class="card" style="margin-top:14px" id="budgetDocCard"><div class="empty">Lädt …</div></div>`;
   body.querySelectorAll("[data-soll]").forEach((el) => el.addEventListener("change", () => saveBudget(el.dataset.soll, el.dataset.typ, el.value, el)));
   body.querySelector("#sollPdf").addEventListener("click", () => printSollIst());
+  if (F.budgetDocsKey === `${F.companyId}:${F.year}`) renderBudgetDocs();
+  else loadBudgetDocs().then(renderBudgetDocs);
+}
+
+// ---------- Budgetplanung (PDF-Upload im Storage) ----------
+const budgetDir = () => `${F.companyId}/budget/${F.year}`;
+async function loadBudgetDocs() {
+  const r = await sb.storage.from("dokumente").list(budgetDir(), { limit: 100, sortBy: { column: "created_at", order: "desc" } });
+  F.budgetDocsKey = `${F.companyId}:${F.year}`;
+  F.budgetDocsErr = r.error ? r.error.message : null;
+  F.budgetDocs = r.error ? [] : (r.data || []).filter((f) => f.id);
+}
+function renderBudgetDocs() {
+  const card = F.root && F.root.querySelector("#budgetDocCard");
+  if (!card) return;
+  const files = F.budgetDocs || [];
+  card.innerHTML = `
+    <div class="row-between" style="margin-bottom:10px">
+      <h3 class="card-title">Budgetplanung (PDF) · ${fyl()}</h3>
+      <label class="btn sm" style="cursor:pointer;margin:0">+ PDF hochladen<input id="budgetUp" type="file" accept="application/pdf,.pdf" hidden></label>
+    </div>
+    ${F.budgetDocsErr
+      ? `<div class="msg err">${esc(F.budgetDocsErr)}</div><p class="note">Falls der Datei-Speicher noch fehlt: <code>supabase/schema_dokumente.sql</code> im Supabase-SQL-Editor ausführen.</p>`
+      : (files.length ? `<table class="tbl"><tbody>${files.map((f) => `<tr>
+          <td>📄 ${esc(f.name.replace(/^\d+-/, ""))}</td>
+          <td class="muted">${f.created_at ? fmtDate(f.created_at.slice(0, 10)) : ""}</td>
+          <td class="num muted">${f.metadata && f.metadata.size ? Math.round(f.metadata.size / 1024) + " KB" : ""}</td>
+          <td class="act"><button class="lnk" data-dopen="${esc(f.name)}">Öffnen</button><button class="lnk del" data-ddel="${esc(f.name)}">Löschen</button></td>
+        </tr>`).join("")}</tbody></table>`
+        : `<div class="empty">Noch keine Budgetplanung für ${fyl()} hochgeladen.</div>`)}
+    <div id="budgetUpErr" class="msg err" hidden style="margin-top:8px"></div>`;
+  const up = card.querySelector("#budgetUp");
+  if (up) up.addEventListener("change", () => up.files[0] && uploadBudgetDoc(up.files[0]));
+  card.querySelectorAll("[data-dopen]").forEach((el) => el.addEventListener("click", () => openBudgetDoc(el.dataset.dopen)));
+  card.querySelectorAll("[data-ddel]").forEach((el) => el.addEventListener("click", () => delBudgetDoc(el.dataset.ddel)));
+}
+async function uploadBudgetDoc(file) {
+  const errEl = F.root.querySelector("#budgetUpErr");
+  const fail = (m) => { if (errEl) { errEl.textContent = m; errEl.hidden = false; } };
+  if (!/pdf/i.test(file.type || "") && !/\.pdf$/i.test(file.name)) { fail("Bitte eine PDF-Datei wählen."); return; }
+  if (file.size > 15 * 1024 * 1024) { fail("Die Datei ist größer als 15 MB."); return; }
+  const safe = file.name.replace(/[^\w.\-]+/g, "_");
+  const r = await sb.storage.from("dokumente").upload(`${budgetDir()}/${Date.now()}-${safe}`, file, { contentType: "application/pdf", upsert: false });
+  if (r.error) { fail("Upload fehlgeschlagen: " + r.error.message); return; }
+  await loadBudgetDocs(); renderBudgetDocs();
+}
+async function openBudgetDoc(name) {
+  const w = window.open("", "_blank");
+  const r = await sb.storage.from("dokumente").createSignedUrl(`${budgetDir()}/${name}`, 120);
+  if (r.error || !r.data) { if (w) w.close(); alert("Konnte Datei nicht öffnen: " + (r.error ? r.error.message : "")); return; }
+  if (w) w.location.href = r.data.signedUrl; else window.open(r.data.signedUrl, "_blank");
+}
+async function delBudgetDoc(name) {
+  if (!confirm("Diese Budgetplanung wirklich löschen?")) return;
+  const r = await sb.storage.from("dokumente").remove([`${budgetDir()}/${name}`]);
+  if (r.error) { alert("Löschen fehlgeschlagen: " + r.error.message); return; }
+  await loadBudgetDocs(); renderBudgetDocs();
 }
 function sollIstRow(k, typ, soll, ist, isFoot, editable) {
   const diff = typ === "einnahme" ? ist - soll : soll - ist; // positiv = günstig
